@@ -223,7 +223,7 @@ function Header() {
     : 0;
 
   return (
-    <header className="sticky top-0 z-40 border-b border-black/[0.05] bg-[#f5f5f7]/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 border-b border-black/[0.05] bg-[#f5f5f7]/80 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
       <div className="mx-auto flex h-[60px] w-full max-w-5xl items-center gap-2 px-4">
         <button
           onClick={() => setTab("garage")}
@@ -478,7 +478,7 @@ function DataScreen() {
 
   if (loadStatus === "loading") {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] text-[14px] font-medium text-neutral-500">
+      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-[14px] font-medium text-neutral-500">
         Loading your garage…
       </div>
     );
@@ -486,7 +486,7 @@ function DataScreen() {
 
   if (loadStatus === "error") {
     return (
-      <main className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5">
+      <main className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         <div className="w-full max-w-md rounded-3xl bg-white p-7 text-center shadow-sm ring-1 ring-black/[0.05]">
           <h1 className="text-lg font-bold text-neutral-900">Couldn't load your cloud garage</h1>
           <p className="mt-2 text-sm leading-relaxed text-neutral-500">{loadError}</p>
@@ -524,7 +524,7 @@ function Root() {
 
   if (status === "loading") {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] text-[14px] font-medium text-neutral-500">
+      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-[14px] font-medium text-neutral-500">
         Loading AutoLog…
       </div>
     );

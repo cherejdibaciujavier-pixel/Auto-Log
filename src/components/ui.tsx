@@ -41,7 +41,7 @@ export function Modal({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    <div className="fixed inset-0 z-50 flex items-end justify-center pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:items-center">
       <button
         aria-label="Close"
         onClick={onClose}
@@ -89,7 +89,7 @@ export function ConfirmDialog({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center px-6">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center px-6 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <button
         aria-label="Cancel"
         onClick={onCancel}
