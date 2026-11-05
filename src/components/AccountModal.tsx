@@ -119,7 +119,7 @@ export default function AccountModal() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[15px] font-bold">
-              {isPremium ? "AutoLog Premium" : "AutoLog Free"}
+              {user.lifetimePremium ? "AutoLog Premium · Lifetime" : isPremium ? "AutoLog Premium" : "AutoLog Free"}
             </span>
             <span
               className={cn(
@@ -127,11 +127,13 @@ export default function AccountModal() {
                 isPremium ? "text-white/85" : "text-neutral-400",
               )}
             >
-              {isPremium && sub
-                ? sub.autoRenew
-                  ? `Renews ${fmtDate(sub.currentPeriodEnd)} · ${sub.cycle}`
-                  : `Ends ${fmtDate(sub.currentPeriodEnd)} · ${sub.cycle}`
-                : "1 vehicle · PDF reports locked"}
+              {user.lifetimePremium
+                ? "Lifetime access · available on all your devices"
+                : isPremium && sub
+                  ? sub.autoRenew
+                    ? `Renews ${fmtDate(sub.currentPeriodEnd)} · ${sub.cycle}`
+                    : `Ends ${fmtDate(sub.currentPeriodEnd)} · ${sub.cycle}`
+                  : "1 vehicle · PDF reports locked"}
             </span>
           </span>
           <span
@@ -142,7 +144,7 @@ export default function AccountModal() {
                 : "bg-[#0071e3] text-white",
             )}
           >
-            {isPremium ? "Manage" : "Upgrade"}
+            {user.lifetimePremium ? "Active" : isPremium ? "Manage" : "Upgrade"}
           </span>
         </button>
 
