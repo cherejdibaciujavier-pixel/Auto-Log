@@ -1,0 +1,200 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", Roboto, sans-serif;
+  /* Numerals and display headings — technical, tabular-friendly. */
+  --font-display: "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont,
+    sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: #f5f5f7;
+  color: #1d1d1f;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Hide number-input spinners for a cleaner, app-like feel */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* ------------------------------ animations ------------------------------ */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes sheet {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.45s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+.animate-fade {
+  animation: fade 0.2s ease both;
+}
+.animate-sheet {
+  animation: sheet 0.38s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+.animate-pop {
+  animation: pop 0.28s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+/* Derived figure settling into place as the driver types. */
+@keyframes num-in {
+  from {
+    opacity: 0.35;
+    transform: translateY(3px);
+    filter: blur(1.5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+.animate-num {
+  animation: num-in 0.3s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-num,
+  .animate-pop,
+  .animate-sheet,
+  .animate-fade-up {
+    animation-duration: 0.01ms;
+  }
+}
+
+/* Slim, subtle scrollbars inside sheets */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 999px;
+}
+
+/* Map markers use inline SVG so they remain sharp and need no icon assets. */
+.leaflet-container {
+  font-family: var(--font-sans);
+  background: #e5ebe9;
+}
+.autolog-map-marker {
+  background: transparent;
+  border: 0;
+}
+.autolog-map-pin {
+  display: flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid white;
+  border-radius: 50%;
+  background: #0071e3;
+  color: white;
+  box-shadow: 0 3px 12px rgb(17 45 70 / 28%);
+  transition: transform 180ms ease, background 180ms ease;
+}
+.autolog-map-pin svg {
+  width: 16px;
+  height: 16px;
+}
+.autolog-map-pin.is-selected {
+  transform: scale(1.18);
+  background: #1d1d1f;
+}
+.leaflet-marker-icon.autolog-map-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 5px solid rgb(0 113 227 / 20%);
+  border-radius: 50%;
+  background-clip: padding-box;
+  background-color: #0071e3;
+  color: white;
+  box-shadow: 0 3px 12px rgb(17 45 70 / 22%);
+  font-size: 12px;
+  font-weight: 700;
+}
+.autolog-map-popup strong {
+  display: block;
+  color: #1d1d1f;
+  font-size: 13px;
+}
+.autolog-map-popup p {
+  margin: 4px 0;
+  color: #6e6e73;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.autolog-map-popup .autolog-map-popup-price {
+  color: #0071e3;
+  font-weight: 700;
+}
+.autolog-map-popup .autolog-map-popup-old {
+  color: #a15c00;
+}
+.autolog-map-popup a {
+  display: inline-block;
+  margin-top: 4px;
+  color: #0071e3;
+  font-weight: 600;
+}
+.leaflet-control-zoom {
+  overflow: hidden;
+  border: 0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 12%);
+}
+.leaflet-control-zoom a {
+  color: #454545 !important;
+}
