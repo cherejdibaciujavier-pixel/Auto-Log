@@ -1,9 +1,7 @@
 /* ------------------------------------------------------------------ */
 /*  AutoLog — global data store.                                       */
-/*  Persists the whole AppData object to localStorage (zero-backend    */
-/*  MVP). The CRUD surface below is intentionally shaped like a REST   */
-/*  client so it can be swapped for Supabase later without touching    */
-/*  the views.                                                         */
+/*  Signed-in users load and save their garage in Supabase. Guest data */
+/*  exists only for the current in-memory session.                      */
 /* ------------------------------------------------------------------ */
 
 import {
@@ -25,6 +23,7 @@ import type {
   VehicleDocument,
 } from "../types";
 import { latestKnownMileage, uid } from "../lib/utils";
+import { supabase } from "../lib/supabase";
 
 export type TabKey = "garage" | "service" | "fuel" | "documents" | "stats";
 export type ModalKind =
@@ -45,6 +44,12 @@ interface ModalState {
 
 interface DataContextValue {
   data: AppData;
+  loadStatus: "loading" | "ready" | "error";
+  loadError: string | null;
+  isSaving: boolean;
+  saveError: string | null;
+  retryLoad: () => void;
+  retrySave: () => void;
   vehicle: Vehicle | null;
   settings: Settings;
   tab: TabKey;
@@ -78,7 +83,6 @@ interface DataContextValue {
 
 const DataContext = createContext<DataContextValue | null>(null);
 
-/** Every account starts with a completely empty garage. */
 export function emptyAppData(): AppData {
   return {
     vehicles: [],
@@ -95,47 +99,191 @@ export function emptyAppData(): AppData {
   };
 }
 
+const CLOUD_DATA_TABLE = "user_app_data";
+const LEGACY_USERS_KEY = "autolog-users-v2";
+
 function storageKeyFor(storageId: string): string {
   return `autolog-db-v2:${storageId}`;
 }
 
-function loadInitialData(storageId: string): AppData {
+function parseAppData(value: unknown): AppData | null {
+  if (!value || typeof value !== "object") return null;
+  const parsed = value as Partial<AppData>;
+  if (
+    !Array.isArray(parsed.vehicles) ||
+    !Array.isArray(parsed.services) ||
+    !Array.isArray(parsed.fuel) ||
+    !Array.isArray(parsed.documents)
+  ) return null;
+
+  const defaults = emptyAppData();
+  return {
+    ...defaults,
+    ...parsed,
+    settings: { ...defaults.settings, ...parsed.settings },
+  };
+}
+
+function readLocalData(key: string): AppData | null {
   try {
-    const raw = localStorage.getItem(storageKeyFor(storageId));
-    if (raw) {
-      const parsed = JSON.parse(raw) as AppData;
-      if (parsed && Array.isArray(parsed.vehicles)) {
-        return { ...emptyAppData(), ...parsed };
-      }
-    }
+    const raw = localStorage.getItem(key);
+    return raw ? parseAppData(JSON.parse(raw)) : null;
   } catch {
-    /* corrupted storage → start empty */
+    return null;
   }
-  return emptyAppData();
+}
+
+function findLegacyAccountData(email: string): { storageKey: string; data: AppData } | null {
+  try {
+    const rawUsers = localStorage.getItem(LEGACY_USERS_KEY);
+    const users = rawUsers ? JSON.parse(rawUsers) as Array<{ id?: string; email?: string }> : [];
+    const legacyUser = users.find((candidate) => candidate.email?.toLowerCase() === email.toLowerCase());
+    if (!legacyUser?.id) return null;
+    const storageKey = storageKeyFor(legacyUser.id);
+    const data = readLocalData(storageKey);
+    return data ? { storageKey, data } : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeMigratedLegacyAccount(email: string, storageKey: string) {
+  try {
+    localStorage.removeItem(storageKey);
+    const rawUsers = localStorage.getItem(LEGACY_USERS_KEY);
+    const users = rawUsers ? JSON.parse(rawUsers) as Array<{ email?: string }> : [];
+    const remaining = users.filter((candidate) => candidate.email?.toLowerCase() !== email.toLowerCase());
+    if (remaining.length) localStorage.setItem(LEGACY_USERS_KEY, JSON.stringify(remaining));
+    else localStorage.removeItem(LEGACY_USERS_KEY);
+  } catch {
+    // Cloud data is already saved; cleanup of old demo credentials is best-effort.
+  }
 }
 
 export function DataProvider({
   children,
-  storageId,
+  cloudUserId,
+  cloudEmail,
 }: {
   children: ReactNode;
-  /** Account id (or "guest") — isolates each user's database. */
-  storageId: string;
+  cloudUserId?: string;
+  cloudEmail?: string;
 }) {
-  const [data, setData] = useState<AppData>(() => loadInitialData(storageId));
+  const [data, setData] = useState<AppData>(emptyAppData);
+  const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">(
+    cloudUserId ? "loading" : "ready",
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [saveAttempt, setSaveAttempt] = useState(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const [tab, setTab] = useState<TabKey>("garage");
   const [modal, setModal] = useState<ModalState>({ kind: null });
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
 
-  /* Persist every mutation (debounce-free: payloads are tiny). */
   useEffect(() => {
-    try {
-      localStorage.setItem(storageKeyFor(storageId), JSON.stringify(data));
-    } catch {
-      /* storage full / private mode — app keeps working in-memory */
+    if (!cloudUserId) {
+      setData(emptyAppData());
+      setLoadError(null);
+      setLoadStatus("ready");
+      return;
     }
-  }, [data, storageId]);
+
+    let cancelled = false;
+    setLoadStatus("loading");
+    setLoadError(null);
+
+    const loadCloudData = async () => {
+      const { data: row, error } = await supabase
+        .from(CLOUD_DATA_TABLE)
+        .select("app_data")
+        .eq("user_id", cloudUserId)
+        .maybeSingle();
+      if (error) throw error;
+
+      let nextData: AppData;
+      let migratedLegacy: { storageKey: string; data: AppData } | null = null;
+      if (row) {
+        const parsed = parseAppData(row.app_data);
+        if (!parsed) throw new Error("The saved garage data is invalid and could not be loaded safely.");
+        nextData = parsed;
+      } else {
+        migratedLegacy = cloudEmail ? findLegacyAccountData(cloudEmail) : null;
+        nextData = readLocalData(storageKeyFor(cloudUserId)) ?? migratedLegacy?.data ?? emptyAppData();
+        const { error: insertError } = await supabase
+          .from(CLOUD_DATA_TABLE)
+          .upsert({ user_id: cloudUserId, app_data: nextData, updated_at: new Date().toISOString() });
+        if (insertError) throw insertError;
+
+        // Remove old browser-only data only after the cloud copy succeeds.
+        try {
+          localStorage.removeItem(storageKeyFor(cloudUserId));
+        } catch {
+          // Cloud storage is already authoritative.
+        }
+        if (migratedLegacy && cloudEmail) {
+          removeMigratedLegacyAccount(cloudEmail, migratedLegacy.storageKey);
+        }
+      }
+
+      if (cancelled) return;
+      setData(nextData);
+      setLoadStatus("ready");
+    };
+
+    void loadCloudData().catch((error: unknown) => {
+      if (cancelled) return;
+      setLoadError(error instanceof Error ? error.message : "Unable to load your cloud garage.");
+      setLoadStatus("error");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cloudUserId, cloudEmail, loadAttempt]);
+
+  useEffect(() => {
+    if (loadStatus !== "ready") return;
+
+    if (!cloudUserId) return;
+
+    const snapshot = data;
+    const timeout = window.setTimeout(() => {
+      setIsSaving(true);
+      const request = saveQueue.current.catch(() => undefined).then(async () => {
+        const { error } = await supabase
+          .from(CLOUD_DATA_TABLE)
+          .upsert({
+            user_id: cloudUserId,
+            app_data: snapshot,
+            updated_at: new Date().toISOString(),
+          });
+        if (error) throw error;
+      });
+      saveQueue.current = request;
+      void request.then(
+        () => {
+          setIsSaving(false);
+          setSaveError(null);
+        },
+        (error: unknown) => {
+          setIsSaving(false);
+          setSaveError(error instanceof Error ? error.message : "Unable to save your cloud garage.");
+        },
+      );
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [data, cloudUserId, loadStatus, saveAttempt]);
+
+  const retryLoad = useCallback(() => setLoadAttempt((attempt) => attempt + 1), []);
+  const retrySave = useCallback(() => {
+    setSaveError(null);
+    setSaveAttempt((attempt) => attempt + 1);
+  }, []);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -343,6 +491,12 @@ export function DataProvider({
 
   const value: DataContextValue = {
     data,
+    loadStatus,
+    loadError,
+    isSaving,
+    saveError,
+    retryLoad,
+    retrySave,
     vehicle,
     settings: data.settings,
     tab,

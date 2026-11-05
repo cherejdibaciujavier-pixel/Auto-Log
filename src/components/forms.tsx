@@ -936,7 +936,7 @@ export function DocumentFormModal() {
 export function SettingsModal() {
   const { data, closeModal, openModal, settings, updateSettings, clearAll, notify } =
     useData();
-  const { isPremium } = useAuth();
+  const { isPremium, user } = useAuth();
   const [intervalKm, setIntervalKm] = useState(
     String(Math.round(kmToUnit(settings.serviceIntervalKm, settings))),
   );
@@ -1019,8 +1019,9 @@ export function SettingsModal() {
           <div className="rounded-2xl bg-[#f5f5f7] p-4">
             <p className="text-[13.5px] font-semibold text-neutral-800">Your data</p>
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-neutral-500">
-              Everything is stored locally in this browser (localStorage),
-              private to your account on this device.
+              {user
+                ? "Your garage is securely stored in Supabase and syncs with your account."
+                : "Guest data is held only for this session and is not saved or uploaded."}
             </p>
             <div className="mt-3 flex gap-2">
               <button

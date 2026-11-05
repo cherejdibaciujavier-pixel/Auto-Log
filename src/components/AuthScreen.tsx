@@ -1,7 +1,5 @@
 /* ------------------------------------------------------------------ */
 /*  AutoLog — sign in / create account / guest entry screen.           */
-/*  Local demo auth (localStorage). Swap AuthContext for Supabase      */
-/*  Auth in production — this screen's interface stays the same.       */
 /* ------------------------------------------------------------------ */
 
 import { useState } from "react";
@@ -24,19 +22,30 @@ import { cn } from "../utils/cn";
 export default function AuthScreen() {
   const { signIn, signUp, continueAsGuest } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signup");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const err =
-      mode === "signup"
-        ? signUp(name, email, password)
-        : signIn(email, password);
-    setError(err);
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = mode === "signup"
+        ? await signUp(name, email, password)
+        : await signIn(email, password);
+      setError(result.error);
+      setNotice(result.message ?? null);
+    } catch {
+      setError("Couldn't connect right now. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -55,8 +64,8 @@ export default function AuthScreen() {
           </h1>
           <p className="mt-1 text-[14px] text-neutral-500">
             {mode === "signup"
-              ? "Your garage, your records — stored on this device."
-              : "Sign in to open your AutoLog garage."}
+              ? "Create a secure AutoLog account with your email."
+              : "Sign in to open your AutoLog account."}
           </p>
         </div>
 
@@ -69,6 +78,7 @@ export default function AuthScreen() {
                 onClick={() => {
                   setMode(m);
                   setError(null);
+                  setNotice(null);
                 }}
                 className={cn(
                   "flex-1 rounded-full py-2 text-[13.5px] font-semibold transition",
@@ -136,16 +146,22 @@ export default function AuthScreen() {
             </div>
 
             {error && (
-              <p className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2.5 text-[13px] font-medium text-red-600">
+              <p role="alert" className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2.5 text-[13px] font-medium text-red-600">
                 <AlertCircle size={15} className="shrink-0" /> {error}
+              </p>
+            )}
+            {notice && (
+              <p role="status" className="rounded-xl bg-emerald-50 px-3 py-2.5 text-[13px] font-medium text-emerald-700">
+                {notice}
               </p>
             )}
 
             <button
               type="submit"
-              className="w-full rounded-full bg-[#0071e3] py-3 text-[15px] font-semibold text-white transition hover:bg-[#0077ed] active:scale-[0.99]"
+              disabled={busy}
+              className="w-full rounded-full bg-[#0071e3] py-3 text-[15px] font-semibold text-white transition hover:bg-[#0077ed] active:scale-[0.99] disabled:cursor-wait disabled:opacity-70"
             >
-              {mode === "signup" ? "Create account" : "Sign in"}
+              {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
             </button>
           </form>
 
@@ -160,8 +176,8 @@ export default function AuthScreen() {
             Continue as guest
           </button>
           <p className="mt-3 text-center text-[11.5px] leading-relaxed text-neutral-400">
-            Guests can use everything on the Free plan. Create a free account
-            anytime to protect your data profile and upgrade.
+            Your signed-in garage syncs to your account. Guest data is temporary
+            and will be cleared when you leave this session.
           </p>
         </div>
 
@@ -183,9 +199,7 @@ export default function AuthScreen() {
             </div>
           ))}
         </div>
-        <p className="mt-5 text-center text-[11px] text-neutral-400">
-          Demo authentication stored locally in your browser.
-        </p>
+
       </div>
     </div>
   );
