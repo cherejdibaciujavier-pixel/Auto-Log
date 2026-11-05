@@ -4,11 +4,12 @@
 /*  canonical storage units (km / litres) on save.                     */
 /* ------------------------------------------------------------------ */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ClipboardCheck,
   Crown,
   Download,
+  ImagePlus,
   Receipt,
   ShieldCheck,
   Trash2,
@@ -23,6 +24,8 @@ import { DOCUMENT_META, SERVICE_CATEGORIES } from "../types";
 import { useData } from "../store/DataContext";
 import { useAuth } from "../store/AuthContext";
 import { getMakes, getModels, getMotorisations } from "../lib/vehicleCatalog";
+import { uploadVehiclePhoto } from "../lib/vehiclePhotos";
+import { useVehiclePhotoUrl } from "./VehiclePhoto";
 import NearbyStations, { type StationSelection } from "./NearbyStations";
 import { FUEL_GRADES, formatStationPrice } from "../lib/stations";
 import {
@@ -100,6 +103,7 @@ function DeleteButton({ onDelete }: { onDelete: () => void }) {
 export function VehicleFormModal() {
   const { data, modal, closeModal, addVehicle, updateVehicle, deleteVehicle, settings } =
     useData();
+  const { user } = useAuth();
   const editing = data.vehicles.find((v) => v.id === modal.editId) ?? null;
 
   const [make, setMake] = useState(editing?.make ?? "");
@@ -120,7 +124,23 @@ export function VehicleFormModal() {
   const [plate, setPlate] = useState(editing?.plate ?? "");
   const [vin, setVin] = useState(editing?.vin ?? "");
   const [image, setImage] = useState(editing?.image ?? "");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | undefined>();
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [savingVehicle, setSavingVehicle] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const existingPhotoUrl = useVehiclePhotoUrl(editing?.imagePath, image.trim() || undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    if (!photoFile) {
+      setPhotoPreview(undefined);
+      return;
+    }
+    const preview = URL.createObjectURL(photoFile);
+    setPhotoPreview(preview);
+    return () => URL.revokeObjectURL(preview);
+  }, [photoFile]);
 
   const makes = getMakes(data.vehicles);
   const models = getModels(make, data.vehicles);
@@ -151,22 +171,37 @@ export function VehicleFormModal() {
     if (option) setFuelType(option.fuelType);
   };
 
-  const submit = () => {
-    if (!valid) return;
-    const payload = {
-      make: make.trim(),
-      model: model.trim(),
-      motorisation: motorisation.trim(),
-      year: Math.min(2100, Math.max(1950, num(year) || new Date().getFullYear())),
-      fuelType,
-      mileage: Math.max(0, Math.round(unitToKm(num(mileage), settings))),
-      plate: plate.trim().toUpperCase(),
-      vin: vin.trim().toUpperCase(),
-      image: image.trim() || undefined,
-    };
-    if (editing) updateVehicle(editing.id, payload);
-    else addVehicle(payload);
-    closeModal();
+  const submit = async () => {
+    if (!valid || savingVehicle) return;
+    setSavingVehicle(true);
+    setPhotoError(null);
+    try {
+      let imagePath = editing?.imagePath;
+      if (photoFile) {
+        if (!user) throw new Error("Sign in to upload a photo to your cloud garage.");
+        imagePath = await uploadVehiclePhoto(user.id, photoFile);
+      }
+
+      const payload = {
+        make: make.trim(),
+        model: model.trim(),
+        motorisation: motorisation.trim(),
+        year: Math.min(2100, Math.max(1950, num(year) || new Date().getFullYear())),
+        fuelType,
+        mileage: Math.max(0, Math.round(unitToKm(num(mileage), settings))),
+        plate: plate.trim().toUpperCase(),
+        vin: vin.trim().toUpperCase(),
+        image: image.trim() || undefined,
+        imagePath,
+      };
+      if (editing) updateVehicle(editing.id, payload);
+      else addVehicle(payload);
+      closeModal();
+    } catch (error) {
+      setPhotoError(error instanceof Error ? error.message : "Couldn't upload that photo. Please try another image.");
+    } finally {
+      setSavingVehicle(false);
+    }
   };
 
   return (
@@ -250,11 +285,53 @@ export function VehicleFormModal() {
               <input className={inputCls} value={vin} onChange={(e) => setVin(e.target.value)} placeholder="SHHFK8G40NU…" maxLength={17} />
             </Field>
           </div>
-          <Field label="Photo URL (optional)">
+          <Field label="Car photo" hint={user ? "Choose from your gallery · JPEG, PNG, WebP or AVIF · up to 10 MB" : "Sign in to upload a photo to your cloud garage"}>
+            <input
+              ref={photoInputRef}
+              className="hidden"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/avif"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0] ?? null;
+                setPhotoError(null);
+                setPhotoFile(file);
+                event.currentTarget.value = "";
+              }}
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={!user}
+                onClick={() => photoInputRef.current?.click()}
+                className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#f5f5f7] px-4 py-2.5 text-[13.5px] font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ImagePlus size={17} />
+                {photoFile ? "Choose another photo" : "Choose from gallery"}
+              </button>
+              {photoFile && (
+                <button
+                  type="button"
+                  onClick={() => setPhotoFile(null)}
+                  className="rounded-xl px-3 text-[13px] font-medium text-red-600 hover:bg-red-50"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            {(photoPreview || existingPhotoUrl) && (
+              <img
+                src={photoPreview ?? existingPhotoUrl}
+                alt="Car photo preview"
+                className="mt-3 h-36 w-full rounded-2xl object-cover"
+              />
+            )}
+          </Field>
+          <Field label="Or use a photo URL (optional)">
             <input className={inputCls} value={image} onChange={(e) => setImage(e.target.value)} placeholder="https://…" />
           </Field>
-          <PrimaryButton type="submit" disabled={!valid}>
-            {editing ? "Save changes" : "Add to garage"}
+          {photoError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[13px] font-medium text-red-600">{photoError}</p>}
+          <PrimaryButton type="submit" disabled={!valid || savingVehicle}>
+            {savingVehicle ? "Saving photo…" : editing ? "Save changes" : "Add to garage"}
           </PrimaryButton>
           {editing && (
             <DeleteButton onDelete={() => setConfirmDelete(true)} />

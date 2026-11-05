@@ -21,7 +21,10 @@ export interface Vehicle {
   mileage: number;
   plate: string;
   vin: string;
+  /** Optional externally hosted image URL. */
   image?: string;
+  /** Private Supabase Storage object path for an uploaded vehicle photo. */
+  imagePath?: string;
   createdAt: number;
 }
 
