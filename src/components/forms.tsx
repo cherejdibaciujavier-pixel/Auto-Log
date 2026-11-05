@@ -26,6 +26,7 @@ import { useAuth } from "../store/AuthContext";
 import { getMakes, getModels, getMotorisations } from "../lib/vehicleCatalog";
 import { uploadVehiclePhoto } from "../lib/vehiclePhotos";
 import { useVehiclePhotoUrl } from "./VehiclePhoto";
+import PhotoCropEditor from "./PhotoCropEditor";
 import NearbyStations, { type StationSelection } from "./NearbyStations";
 import { FUEL_GRADES, formatStationPrice } from "../lib/stations";
 import {
@@ -125,6 +126,7 @@ export function VehicleFormModal() {
   const [vin, setVin] = useState(editing?.vin ?? "");
   const [image, setImage] = useState(editing?.image ?? "");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [cropSource, setCropSource] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | undefined>();
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [savingVehicle, setSavingVehicle] = useState(false);
@@ -285,7 +287,7 @@ export function VehicleFormModal() {
               <input className={inputCls} value={vin} onChange={(e) => setVin(e.target.value)} placeholder="SHHFK8G40NU…" maxLength={17} />
             </Field>
           </div>
-          <Field label="Photo (optional)" hint={user ? "Paste a photo URL or choose an image from your gallery · up to 10 MB" : "Paste a photo URL, or sign in to upload from your gallery"}>
+          <Field label="Photo (optional)" hint={user ? "Paste a URL or choose from gallery, then drag and zoom to frame it · up to 10 MB" : "Paste a photo URL, or sign in to upload from your gallery"}>
             <input
               ref={photoInputRef}
               className="hidden"
@@ -294,7 +296,7 @@ export function VehicleFormModal() {
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0] ?? null;
                 setPhotoError(null);
-                setPhotoFile(file);
+                setCropSource(file);
                 event.currentTarget.value = "";
               }}
             />
@@ -314,7 +316,7 @@ export function VehicleFormModal() {
                   className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#f5f5f7] px-4 py-2.5 text-[13.5px] font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <ImagePlus size={17} />
-                  {photoFile ? "Choose another photo" : "Choose from gallery"}
+                  {photoFile ? "Adjust or change photo" : "Choose from gallery"}
                 </button>
                 {photoFile && (
                   <button
@@ -344,6 +346,17 @@ export function VehicleFormModal() {
           )}
         </form>
       </Modal>
+      {cropSource && (
+        <PhotoCropEditor
+          key={`${cropSource.name}-${cropSource.size}-${cropSource.lastModified}`}
+          file={cropSource}
+          onCancel={() => setCropSource(null)}
+          onApply={(croppedPhoto) => {
+            setPhotoFile(croppedPhoto);
+            setCropSource(null);
+          }}
+        />
+      )}
       <ConfirmDialog
         open={confirmDelete}
         title="Delete this vehicle?"
