@@ -146,6 +146,9 @@ function friendlyAuthError(message: string): string {
   if (/user already registered/i.test(message)) return "An account with this email already exists. Try signing in.";
   if (/password should be at least/i.test(message)) return "Password must be at least 6 characters.";
   if (/email not confirmed/i.test(message)) return "Please confirm your email before signing in.";
+  if (/^(?:typeerror:\s*)?(?:load failed|failed to fetch|networkerror|network request failed)$/i.test(message.trim())) {
+    return "Couldn't reach AutoLog sign-in. Check your connection, then try again. If it continues, temporarily turn off a VPN or content blocker and retry.";
+  }
   return message;
 }
 
