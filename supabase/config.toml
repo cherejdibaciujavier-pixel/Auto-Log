@@ -1,2 +1,5 @@
 [functions.delete-account]
 verify_jwt = true
+
+[functions.redeem-lifetime-premium]
+verify_jwt = true

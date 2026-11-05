@@ -34,6 +34,7 @@ export interface UserAccount {
   createdAt: string;
   plan: "free" | "premium";
   subscription: Subscription | null;
+  lifetimePremium: boolean;
 }
 
 export const PLAN_PRICES: Record<PlanCycle, { total: number; perMonth: number }> = {
@@ -55,6 +56,8 @@ interface AuthContextValue {
   status: AuthStatus;
   user: UserAccount | null;
   isPremium: boolean;
+  lifetimePremium: boolean;
+  redeemLifetimeCode: (code: string) => Promise<string | null>;
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signOut: () => Promise<void>;
@@ -118,7 +121,11 @@ function addMonthsISO(iso: string, months: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function accountFromAuthUser(authUser: User, localState: LocalAccountState): UserAccount {
+function accountFromAuthUser(
+  authUser: User,
+  localState: LocalAccountState,
+  lifetimePremium: boolean,
+): UserAccount {
   const metadataName = authUser.user_metadata?.full_name;
   const email = authUser.email ?? "";
   return {
@@ -130,6 +137,7 @@ function accountFromAuthUser(authUser: User, localState: LocalAccountState): Use
     createdAt: authUser.created_at?.slice(0, 10) ?? todayISO(),
     plan: localState.plan,
     subscription: localState.subscription,
+    lifetimePremium,
   };
 }
 
@@ -146,6 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [guest, setGuest] = useState(false);
   const [accountStates, setAccountStates] = useState<Record<string, LocalAccountState>>({});
+  const [lifetimeEntitlements, setLifetimeEntitlements] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let active = true;
@@ -188,12 +197,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    const userId = authUser?.id;
+    if (!userId) return;
+    let active = true;
+    void supabase
+      .from("user_entitlements")
+      .select("lifetime_premium")
+      .eq("user_id", userId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.error("Unable to load account entitlements", error);
+          return;
+        }
+        setLifetimeEntitlements((entitlements) => ({
+          ...entitlements,
+          [userId]: entitlements[userId] === true || data?.lifetime_premium === true,
+        }));
+      });
+    return () => { active = false; };
+  }, [authUser?.id]);
+
   const localState = authUser
     ? accountStates[authUser.id] ?? readAccountState(authUser.id)
     : { plan: "free" as const, subscription: null };
+  const lifetimePremium = authUser
+    ? lifetimeEntitlements[authUser.id] === true
+    : false;
   const user = useMemo(
-    () => authUser ? accountFromAuthUser(authUser, localState) : null,
-    [authUser, localState],
+    () => authUser ? accountFromAuthUser(authUser, localState, lifetimePremium) : null,
+    [authUser, localState, lifetimePremium],
   );
   const status: AuthStatus = !ready
     ? "loading"
@@ -202,7 +237,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : guest
         ? "guest"
         : "anon";
-  const isPremium = user?.plan === "premium";
+  const isPremium = user?.plan === "premium" || lifetimePremium;
 
   const signUp = useCallback(async (name: string, email: string, password: string): Promise<AuthResult> => {
     const cleanName = name.trim();
@@ -308,6 +343,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     updateLocalAccount(authUser.id, { ...existing, subscription });
   }, [accountStates, authUser, updateLocalAccount]);
 
+  const redeemLifetimeCode = useCallback(async (code: string): Promise<string | null> => {
+    if (!authUser) return "Sign in to redeem a Premium code.";
+    const cleanCode = code.trim();
+    if (!cleanCode) return "Enter your Premium code.";
+
+    const { data, error } = await supabase.functions.invoke("redeem-lifetime-premium", {
+      body: { code: cleanCode },
+    });
+    if (error) {
+      const response = (error as { context?: unknown }).context;
+      if (response instanceof Response) {
+        try {
+          const body = await response.clone().json() as { error?: unknown };
+          if (typeof body.error === "string") return body.error;
+        } catch {
+          // Fall through to the generic network error.
+        }
+      }
+      return data?.error ?? "Couldn't redeem that code. Please try again.";
+    }
+    if (data?.success !== true) return data?.error ?? "That code couldn't be redeemed.";
+
+    setLifetimeEntitlements((entitlements) => ({
+      ...entitlements,
+      [authUser.id]: true,
+    }));
+    return null;
+  }, [authUser]);
+
   const deleteAccount = useCallback(async (): Promise<string | null> => {
     if (!authUser) return "Not signed in.";
     const { error } = await supabase.functions.invoke("delete-account");
@@ -326,6 +390,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     status,
     user,
     isPremium,
+    lifetimePremium,
+    redeemLifetimeCode,
     signUp,
     signIn,
     signOut,
