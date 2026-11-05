@@ -22,7 +22,7 @@ import type {
 } from "../types";
 import { DOCUMENT_META, SERVICE_CATEGORIES } from "../types";
 import { useData } from "../store/DataContext";
-import { useAuth } from "../store/AuthContext";
+import { FREE_VEHICLE_LIMIT, useAuth } from "../store/AuthContext";
 import { getMakes, getModels, getMotorisations } from "../lib/vehicleCatalog";
 import { uploadVehiclePhoto } from "../lib/vehiclePhotos";
 import { useVehiclePhotoUrl } from "./VehiclePhoto";
@@ -102,9 +102,9 @@ function DeleteButton({ onDelete }: { onDelete: () => void }) {
 
 /* ------------------------------ Vehicle ------------------------------ */
 export function VehicleFormModal() {
-  const { data, modal, closeModal, addVehicle, updateVehicle, deleteVehicle, settings } =
+  const { data, modal, closeModal, openModal, addVehicle, updateVehicle, deleteVehicle, settings } =
     useData();
-  const { user } = useAuth();
+  const { user, isPremium } = useAuth();
   const editing = data.vehicles.find((v) => v.id === modal.editId) ?? null;
 
   const [make, setMake] = useState(editing?.make ?? "");
@@ -175,6 +175,11 @@ export function VehicleFormModal() {
 
   const submit = async () => {
     if (!valid || savingVehicle) return;
+    if (!editing && !isPremium && data.vehicles.length >= FREE_VEHICLE_LIMIT) {
+      closeModal();
+      openModal("pricing");
+      return;
+    }
     setSavingVehicle(true);
     setPhotoError(null);
     try {

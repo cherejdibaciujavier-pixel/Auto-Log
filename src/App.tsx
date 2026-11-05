@@ -217,7 +217,9 @@ function VehicleSwitcher() {
 function Header() {
   const { data, vehicle, settings, openModal, setTab } = useData();
   const { user, status, isPremium } = useAuth();
-  const alertCount = vehicle ? computeAlerts(vehicle, data, settings).length : 0;
+  const alertCount = vehicle
+    ? computeAlerts(vehicle, data, settings, isPremium ? 90 : 30).length
+    : 0;
 
   return (
     <header className="sticky top-0 z-40 border-b border-black/[0.05] bg-[#f5f5f7]/80 backdrop-blur-xl">

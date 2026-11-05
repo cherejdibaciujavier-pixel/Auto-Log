@@ -211,11 +211,14 @@ export function getServiceStatus(
 
 /* ------------------------------ documents ------------------------------ */
 
-export function getDocumentStatus(doc: VehicleDocument): DocumentStatus {
+export function getDocumentStatus(
+  doc: VehicleDocument,
+  warningDays = 30,
+): DocumentStatus {
   const days = daysUntil(doc.expiryDate);
   return {
     daysRemaining: days,
-    state: days < 0 ? "overdue" : days <= 30 ? "soon" : "ok",
+    state: days < 0 ? "overdue" : days <= warningDays ? "soon" : "ok",
   };
 }
 
@@ -374,6 +377,7 @@ export function computeAlerts(
   vehicle: Vehicle,
   data: Pick<AppData, "services" | "documents">,
   settings: Settings,
+  documentWarningDays = 30,
 ): AlertItem[] {
   const alerts: AlertItem[] = [];
   const svc = getServiceStatus(vehicle, data.services, settings);
@@ -402,7 +406,7 @@ export function computeAlerts(
   data.documents
     .filter((d) => d.vehicleId === vehicle.id)
     .forEach((doc) => {
-      const st = getDocumentStatus(doc);
+      const st = getDocumentStatus(doc, documentWarningDays);
       if (st.state === "soon" || st.state === "overdue") {
         alerts.push({
           id: `alert-doc-${doc.id}`,
