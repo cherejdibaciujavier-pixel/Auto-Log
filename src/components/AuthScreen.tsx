@@ -49,7 +49,7 @@ export default function AuthScreen() {
   };
 
   return (
-    <div className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden px-4 py-10">
+    <div className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden px-4 pt-[calc(env(safe-area-inset-top)+2.5rem)] pb-[calc(env(safe-area-inset-bottom)+2.5rem)]">
       {/* soft ambient background */}
       <div className="pointer-events-none absolute -top-32 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-[#0071e3]/15 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-40 -right-20 h-80 w-80 rounded-full bg-[#30b0c7]/15 blur-3xl" />

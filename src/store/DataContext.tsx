@@ -17,12 +17,13 @@ import {
 import type {
   AppData,
   FuelRecord,
+  MaintenancePlan,
   ServiceRecord,
   Settings,
   Vehicle,
   VehicleDocument,
 } from "../types";
-import { latestKnownMileage, uid } from "../lib/utils";
+import { latestKnownMileage, todayISO, uid } from "../lib/utils";
 import { supabase } from "../lib/supabase";
 
 export type TabKey = "garage" | "service" | "fuel" | "documents" | "stats";
@@ -77,6 +78,11 @@ interface DataContextValue {
   updateDocument: (id: string, patch: Partial<VehicleDocument>) => void;
   deleteDocument: (id: string) => void;
 
+  addMaintenancePlan: (plan: Omit<MaintenancePlan, "id">) => void;
+  completeMaintenancePlan: (id: string) => void;
+  deleteMaintenancePlan: (id: string) => void;
+
+  restoreBackup: (backup: AppData, mode: "merge" | "replace") => void;
   updateSettings: (patch: Partial<Settings>) => void;
   clearAll: () => void;
 }
@@ -89,11 +95,13 @@ export function emptyAppData(): AppData {
     services: [],
     fuel: [],
     documents: [],
+    maintenancePlans: [],
     settings: {
       currency: "EUR",
       unit: "km",
       serviceIntervalKm: 15000,
       serviceIntervalDays: 365,
+      fuelStationPromptEnabled: false,
     },
     activeVehicleId: null,
   };
@@ -122,6 +130,67 @@ function parseAppData(value: unknown): AppData | null {
     ...parsed,
     settings: { ...defaults.settings, ...parsed.settings },
   };
+}
+
+function vehicleIdentity(vehicle: Vehicle): string {
+  const vin = vehicle.vin?.trim().toUpperCase();
+  if (vin) return `vin:${vin}`;
+  const plate = vehicle.plate?.trim().toUpperCase();
+  if (plate) return `plate:${plate}`;
+  return `id:${vehicle.id}:${vehicle.make.toLowerCase()}:${vehicle.model.toLowerCase()}:${vehicle.year}`;
+}
+
+function mergeBackupData(current: AppData, backup: AppData): AppData {
+  const vehicles = [...current.vehicles];
+  const vehicleIds = new Set(vehicles.map((vehicle) => vehicle.id));
+  const byIdentity = new Map(vehicles.map((vehicle) => [vehicleIdentity(vehicle), vehicle]));
+  const idMap = new Map<string, string>();
+
+  for (const incoming of backup.vehicles) {
+    const sameId = vehicles.find((vehicle) => vehicle.id === incoming.id);
+    const sameIdentity = byIdentity.get(vehicleIdentity(incoming));
+    const match = sameIdentity ?? (sameId && sameId.make === incoming.make && sameId.model === incoming.model && sameId.year === incoming.year ? sameId : undefined);
+    if (match) {
+      idMap.set(incoming.id, match.id);
+      continue;
+    }
+    const id = vehicleIds.has(incoming.id) ? uid() : incoming.id;
+    const vehicle = { ...incoming, id };
+    vehicles.push(vehicle);
+    vehicleIds.add(id);
+    byIdentity.set(vehicleIdentity(vehicle), vehicle);
+    idMap.set(incoming.id, id);
+  }
+
+  const mergeRecords = <T extends { id: string; vehicleId: string }>(
+    existing: T[],
+    incoming: T[],
+  ): T[] => {
+    const result = [...existing];
+    const existingIds = new Set(existing.map((record) => record.id));
+    const validVehicles = new Set(vehicles.map((vehicle) => vehicle.id));
+    for (const record of incoming) {
+      const vehicleId = idMap.get(record.vehicleId) ?? record.vehicleId;
+      if (!validVehicles.has(vehicleId)) continue;
+      if (existingIds.has(record.id)) continue;
+      result.push({ ...record, vehicleId });
+      existingIds.add(record.id);
+    }
+    return result;
+  };
+
+  const merged: AppData = {
+    ...current,
+    vehicles,
+    services: mergeRecords(current.services, backup.services),
+    fuel: mergeRecords(current.fuel, backup.fuel),
+    documents: mergeRecords(current.documents, backup.documents),
+    maintenancePlans: mergeRecords(current.maintenancePlans, backup.maintenancePlans),
+  };
+  merged.activeVehicleId = current.activeVehicleId && vehicles.some((vehicle) => vehicle.id === current.activeVehicleId)
+    ? current.activeVehicleId
+    : vehicles[0]?.id ?? null;
+  return merged;
 }
 
 function readLocalData(key: string): AppData | null {
@@ -337,6 +406,7 @@ export function DataProvider({
           services: d.services.filter((r) => r.vehicleId !== id),
           fuel: d.fuel.filter((r) => r.vehicleId !== id),
           documents: d.documents.filter((r) => r.vehicleId !== id),
+          maintenancePlans: d.maintenancePlans.filter((plan) => plan.vehicleId !== id),
           activeVehicleId:
             d.activeVehicleId === id
               ? (vehicles[0]?.id ?? null)
@@ -460,6 +530,53 @@ export function DataProvider({
     [notify],
   );
 
+  /* --------------------------- maintenance plans --------------------------- */
+  const addMaintenancePlan = useCallback(
+    (plan: Omit<MaintenancePlan, "id">) => {
+      setData((d) => ({
+        ...d,
+        maintenancePlans: [...d.maintenancePlans, { ...plan, id: uid() }],
+      }));
+      notify("Maintenance plan added");
+    },
+    [notify],
+  );
+  const completeMaintenancePlan = useCallback(
+    (id: string) => {
+      setData((d) => {
+        const plan = d.maintenancePlans.find((item) => item.id === id);
+        const vehicle = plan && d.vehicles.find((item) => item.id === plan.vehicleId);
+        if (!plan || !vehicle) return d;
+        return {
+          ...d,
+          maintenancePlans: d.maintenancePlans.map((item) => item.id === id
+            ? { ...item, lastCompletedDate: todayISO(), lastCompletedMileage: vehicle.mileage }
+            : item),
+        };
+      });
+      notify("Maintenance task marked complete");
+    },
+    [notify],
+  );
+  const deleteMaintenancePlan = useCallback(
+    (id: string) => {
+      setData((d) => ({
+        ...d,
+        maintenancePlans: d.maintenancePlans.filter((plan) => plan.id !== id),
+      }));
+      notify("Maintenance plan deleted");
+    },
+    [notify],
+  );
+
+  const restoreBackup = useCallback(
+    (backup: AppData, mode: "merge" | "replace") => {
+      setData((current) => mode === "replace" ? backup : mergeBackupData(current, backup));
+      notify(mode === "replace" ? "Backup restored" : "Backup merged into your garage");
+    },
+    [notify],
+  );
+
   /* ------------------------------- settings ------------------------------- */
   const updateSettings = useCallback(
     (patch: Partial<Settings>) => {
@@ -476,6 +593,7 @@ export function DataProvider({
       services: [],
       fuel: [],
       documents: [],
+      maintenancePlans: [],
       activeVehicleId: null,
     }));
     notify("All data cleared");
@@ -519,6 +637,10 @@ export function DataProvider({
     addDocument,
     updateDocument,
     deleteDocument,
+    addMaintenancePlan,
+    completeMaintenancePlan,
+    deleteMaintenancePlan,
+    restoreBackup,
     updateSettings,
     clearAll,
   };

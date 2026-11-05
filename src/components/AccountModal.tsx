@@ -7,6 +7,7 @@ import { useState } from "react";
 import {
   Crown,
   LogOut,
+  Mail,
   ShieldCheck,
   Trash2,
   UserRound,
@@ -147,6 +148,21 @@ export default function AccountModal() {
             {user.lifetimePremium ? "Active" : isPremium ? "Manage" : "Upgrade"}
           </span>
         </button>
+
+        {isPremium && (
+          <a
+            href={`mailto:cherejdibaciujavier@gmail.com?subject=${encodeURIComponent("AutoLog Premium priority support")}&body=${encodeURIComponent(`Hello AutoLog support,\n\nAccount: ${user.email}\nName: ${user.name}\n\nHow can we help?\n`)}`}
+            className="mt-3 flex items-center gap-3 rounded-[20px] bg-blue-50 p-4 text-left text-[#0071e3] transition hover:bg-blue-100"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white">
+              <Mail size={19} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[14px] font-bold">Priority email support</span>
+              <span className="block text-[12px] text-blue-700/75">Contact the AutoLog support team</span>
+            </span>
+          </a>
+        )}
 
         {/* ----------------------------- edit profile ----------------------------- */}
         <div className="mt-6 space-y-4">

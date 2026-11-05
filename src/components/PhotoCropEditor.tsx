@@ -162,7 +162,7 @@ export default function PhotoCropEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-5 sm:px-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 pt-[calc(env(safe-area-inset-top)+1.25rem)] pb-[calc(env(safe-area-inset-bottom)+1.25rem)] sm:px-6">
       <button
         type="button"
         aria-label="Close photo editor"

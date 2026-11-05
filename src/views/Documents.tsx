@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useData } from "../store/DataContext";
+import { useAuth } from "../store/AuthContext";
 import { useVehicleRecords } from "../components/forms";
 import { DOCUMENT_META, type DocumentType } from "../types";
 import {
@@ -41,6 +42,8 @@ const DOC_TINT: Record<DocumentType, string> = {
 
 export default function DocumentsView() {
   const { openModal, settings } = useData();
+  const { isPremium } = useAuth();
+  const warningDays = isPremium ? 90 : 30;
   const { documents } = useVehicleRecords();
 
   const trackedTypes = new Set(documents.map((d) => d.type));
@@ -62,12 +65,17 @@ export default function DocumentsView() {
       >
         Legal documents
       </SectionTitle>
+      <p className="mb-3 text-[12.5px] text-neutral-400">
+        {isPremium
+          ? "Premium expiry forecasts start 90 days before a document expires."
+          : "Expiry reminders start 30 days before a document expires."}
+      </p>
 
       {documents.length === 0 ? (
         <EmptyState
           icon={<FileText size={22} />}
           title="No documents tracked"
-          body="Add your inspection, insurance and road tax expiry dates — AutoLog will warn you 30 days ahead so you never pay a late fine."
+          body={`Add your inspection, insurance and road tax expiry dates — AutoLog will warn you ${warningDays} days ahead so you can plan renewals in time.`}
           action={
             <button
               onClick={() => openModal("document")}
@@ -80,7 +88,7 @@ export default function DocumentsView() {
       ) : (
         <div className="space-y-3">
           {documents.map((d) => {
-            const st = getDocumentStatus(d);
+            const st = getDocumentStatus(d, warningDays);
             const Icon = DOC_ICONS[d.type];
             return (
               <button
@@ -108,7 +116,7 @@ export default function DocumentsView() {
                           st.state === "ok"
                             ? "Active"
                             : st.state === "soon"
-                              ? "Expiring soon"
+                              ? `Within ${warningDays} days`
                               : "Expired"
                         }
                       />

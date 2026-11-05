@@ -254,7 +254,7 @@ export function generateServiceReport(
       styles: { fontSize: 8.5, cellPadding: { top: 2, bottom: 2 } },
       alternateRowStyles: { fillColor: [245, 245, 247] },
       body: documents.map((d) => {
-        const st = getDocumentStatus(d);
+        const st = getDocumentStatus(d, 90);
         return [
           DOCUMENT_META[d.type].label,
           d.provider || "—",

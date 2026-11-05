@@ -96,7 +96,7 @@ export default function GarageView() {
     );
   }
 
-  const alerts = computeAlerts(vehicle, data, settings);
+  const alerts = computeAlerts(vehicle, data, settings, isPremium ? 90 : 30);
   const expenses = computeExpenses(vehicle.id, data);
   const svc = getServiceStatus(vehicle, data.services, settings);
   const docs = data.documents
@@ -296,7 +296,7 @@ export default function GarageView() {
             {nextDoc ? (
               <>
                 <div className="mt-1">
-                  <StatusPill state={getDocumentStatus(nextDoc).state} />
+                  <StatusPill state={getDocumentStatus(nextDoc, isPremium ? 90 : 30).state} />
                 </div>
                 <p className="mt-1.5 text-[12px] leading-snug text-neutral-400">
                   {DOCUMENT_META[nextDoc.type].label} · {fmtDate(nextDoc.expiryDate)}

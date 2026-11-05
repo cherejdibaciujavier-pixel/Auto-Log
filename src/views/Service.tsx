@@ -2,15 +2,19 @@
 /*  Service — maintenance log with the Dynamic Next-Service Predictor. */
 /* ------------------------------------------------------------------ */
 
+import { useState } from "react";
 import {
   CalendarDays,
+  CheckCircle2,
   Gauge,
   MapPin,
   Plus,
   Sparkles,
+  Trash2,
   Wrench,
 } from "lucide-react";
 import { useData } from "../store/DataContext";
+import { getMaintenancePlanStatus } from "../lib/maintenance";
 import { useVehicleRecords } from "../components/forms";
 import {
   fmtCountdown,
@@ -20,6 +24,8 @@ import {
   fmtNum,
   getServiceStatus,
   kmToUnit,
+  todayISO,
+  unitToKm,
 } from "../lib/utils";
 import type { ServiceCategory } from "../types";
 import {
@@ -80,12 +86,46 @@ function ProgressRow({
 }
 
 export default function ServiceView() {
-  const { vehicle, settings, openModal, data } = useData();
+  const {
+    vehicle,
+    settings,
+    openModal,
+    data,
+    addMaintenancePlan,
+    completeMaintenancePlan,
+    deleteMaintenancePlan,
+  } = useData();
   const { services } = useVehicleRecords();
+  const [showPlanForm, setShowPlanForm] = useState(false);
+  const [planTitle, setPlanTitle] = useState("");
+  const [planDistance, setPlanDistance] = useState("");
+  const [planDays, setPlanDays] = useState("");
 
   if (!vehicle) return null;
   const svc = getServiceStatus(vehicle, data.services, settings);
   const totalMaintenance = services.reduce((t, r) => t + r.cost, 0);
+  const maintenancePlans = data.maintenancePlans;
+  const distance = planDistance.trim() ? Number(planDistance.replace(",", ".")) : null;
+  const days = planDays.trim() ? Number(planDays) : null;
+  const canSavePlan = Boolean(planTitle.trim())
+    && (distance !== null || days !== null)
+    && (distance === null || (Number.isFinite(distance) && distance > 0))
+    && (days === null || (Number.isFinite(days) && days > 0));
+  const savePlan = () => {
+    if (!canSavePlan) return;
+    addMaintenancePlan({
+      vehicleId: vehicle.id,
+      title: planTitle.trim(),
+      intervalKm: distance === null ? null : Math.round(unitToKm(distance, settings)),
+      intervalDays: days === null ? null : Math.round(days),
+      lastCompletedDate: todayISO(),
+      lastCompletedMileage: vehicle.mileage,
+    });
+    setPlanTitle("");
+    setPlanDistance("");
+    setPlanDays("");
+    setShowPlanForm(false);
+  };
 
   return (
     <div className="animate-fade-up">
@@ -166,6 +206,123 @@ export default function ServiceView() {
           <Plus size={16} strokeWidth={2.5} /> Log a service
         </button>
       </div>
+
+      {/* ------------------------- maintenance planner ------------------------- */}
+      <SectionTitle
+        action={(
+          <button
+            onClick={() => setShowPlanForm((open) => !open)}
+            className="inline-flex items-center gap-1 rounded-full bg-[#0071e3] px-3.5 py-1.5 text-[13px] font-semibold text-white transition hover:bg-[#0077ed]"
+          >
+            <Plus size={14} strokeWidth={2.5} /> Add task
+          </button>
+        )}
+      >
+        Maintenance planner
+      </SectionTitle>
+      <p className="-mt-2 mb-3 text-[12.5px] text-neutral-400">
+        Set a date interval, mileage interval, or both for the selected vehicle. The planner shows tasks across your garage; completing a task resets it from today and that vehicle’s current odometer.
+      </p>
+      {showPlanForm && (
+        <div className="mb-3 space-y-3 rounded-[22px] bg-white p-4 ring-1 ring-black/[0.04]">
+          <label className="block text-[12px] font-semibold text-neutral-600">
+            Task name
+            <input
+              value={planTitle}
+              onChange={(event) => setPlanTitle(event.target.value)}
+              placeholder="e.g. Replace cabin air filter"
+              maxLength={80}
+              className="mt-1.5 w-full rounded-xl bg-[#f5f5f7] px-3.5 py-2.5 text-[14px] font-normal text-neutral-900 outline-none focus:ring-2 focus:ring-[#0071e3]/30"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-[12px] font-semibold text-neutral-600">
+              Repeat every ({settings.unit})
+              <input
+                type="number"
+                min="1"
+                value={planDistance}
+                onChange={(event) => setPlanDistance(event.target.value)}
+                placeholder="Optional"
+                className="mt-1.5 w-full rounded-xl bg-[#f5f5f7] px-3.5 py-2.5 text-[14px] font-normal text-neutral-900 outline-none focus:ring-2 focus:ring-[#0071e3]/30"
+              />
+            </label>
+            <label className="block text-[12px] font-semibold text-neutral-600">
+              Repeat every (days)
+              <input
+                type="number"
+                min="1"
+                value={planDays}
+                onChange={(event) => setPlanDays(event.target.value)}
+                placeholder="Optional"
+                className="mt-1.5 w-full rounded-xl bg-[#f5f5f7] px-3.5 py-2.5 text-[14px] font-normal text-neutral-900 outline-none focus:ring-2 focus:ring-[#0071e3]/30"
+              />
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowPlanForm(false)}
+              className="flex-1 rounded-full bg-[#f5f5f7] py-2.5 text-[13.5px] font-semibold text-neutral-600"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={savePlan}
+              disabled={!canSavePlan}
+              className="flex-1 rounded-full bg-[#0071e3] py-2.5 text-[13.5px] font-semibold text-white disabled:opacity-40"
+            >
+              Save maintenance task
+            </button>
+          </div>
+        </div>
+      )}
+      {maintenancePlans.length === 0 ? (
+        <div className="rounded-[20px] bg-white px-4 py-4 text-[13px] text-neutral-500 ring-1 ring-black/[0.04]">
+          No recurring maintenance tasks yet.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {maintenancePlans.map((plan) => {
+            const plannedVehicle = data.vehicles.find((item) => item.id === plan.vehicleId);
+            if (!plannedVehicle) return null;
+            const planStatus = getMaintenancePlanStatus(plan, plannedVehicle);
+            const state = planStatus.overdue ? "overdue" : planStatus.dueSoon ? "soon" : "ok";
+            return (
+              <div key={plan.id} className="flex items-center gap-3 rounded-[20px] bg-white p-4 ring-1 ring-black/[0.04]">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-[#0071e3]">
+                  <Wrench size={18} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[14px] font-semibold text-neutral-900">{plan.title}</p>
+                  <p className="truncate text-[11.5px] font-medium text-[#0071e3]">{vehicleName(plannedVehicle)}</p>
+                  <p className="mt-0.5 text-[12px] text-neutral-400">
+                    {[
+                      planStatus.dueDate ? `Due ${fmtDate(planStatus.dueDate)}` : null,
+                      planStatus.dueMileage !== null ? `At ${fmtDistance(planStatus.dueMileage, settings)}` : null,
+                    ].filter(Boolean).join(" · ")}
+                  </p>
+                  <StatusPill state={state} label={planStatus.overdue ? "Overdue" : planStatus.dueSoon ? "Due soon" : "On track"} />
+                </div>
+                <button
+                  onClick={() => completeMaintenancePlan(plan.id)}
+                  aria-label={`Mark ${plan.title} complete`}
+                  title="Mark complete and reset recurrence"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"
+                >
+                  <CheckCircle2 size={17} />
+                </button>
+                <button
+                  onClick={() => deleteMaintenancePlan(plan.id)}
+                  aria-label={`Delete ${plan.title}`}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-500"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* --------------------- affiliate slot: parts --------------------- */}
       <div className="mt-4">

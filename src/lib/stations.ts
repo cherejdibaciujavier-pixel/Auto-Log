@@ -389,6 +389,11 @@ function mergeStations(osm: Station[], priced: Station[]): Station[] {
   return [...combined, ...osm.filter((station) => unused.has(station.id))];
 }
 
+export async function findNearbyFuelStations(center: Coordinates, radiusKm: number, signal: AbortSignal): Promise<Station[]> {
+  const result = await searchOpenStreetMap(center, radiusKm, "fuel", signal);
+  return result.stations.sort((a, b) => a.distanceKm - b.distanceKm);
+}
+
 export async function findNearbyStations(center: Coordinates, radiusKm: number, kind: StationKind, signal: AbortSignal): Promise<StationSearchResult> {
   const locationRequest = searchOpenStreetMap(center, radiusKm, kind, signal);
   const priceRequests: Promise<PriceFeedResult>[] = [];

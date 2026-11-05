@@ -6,7 +6,7 @@
 /*  in memory for the current session.                                 */
 /* ------------------------------------------------------------------ */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bell,
   Car,
@@ -30,6 +30,7 @@ import {
   useAuth,
 } from "./store/AuthContext";
 import { computeAlerts, fmtDistance, vehicleName } from "./lib/utils";
+import { distanceKm, findNearbyFuelStations, type Coordinates, type Station } from "./lib/stations";
 import { PlateChip } from "./components/ui";
 import {
   DocumentFormModal,
@@ -217,10 +218,12 @@ function VehicleSwitcher() {
 function Header() {
   const { data, vehicle, settings, openModal, setTab } = useData();
   const { user, status, isPremium } = useAuth();
-  const alertCount = vehicle ? computeAlerts(vehicle, data, settings).length : 0;
+  const alertCount = vehicle
+    ? computeAlerts(vehicle, data, settings, isPremium ? 90 : 30).length
+    : 0;
 
   return (
-    <header className="sticky top-0 z-40 border-b border-black/[0.05] bg-[#f5f5f7]/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 border-b border-black/[0.05] bg-[#f5f5f7]/80 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
       <div className="mx-auto flex h-[60px] w-full max-w-5xl items-center gap-2 px-4">
         <button
           onClick={() => setTab("garage")}
@@ -296,6 +299,103 @@ function Header() {
   );
 }
 
+function FuelStationPromptWatcher() {
+  const { settings, openModal, setTab, notify } = useData();
+  const enabled = settings.fuelStationPromptEnabled;
+
+  useEffect(() => {
+    if (!enabled || typeof Notification === "undefined"
+      || Notification.permission !== "granted" || !navigator.geolocation) return;
+
+    let active = true;
+    let latestPosition: Coordinates | null = null;
+    let stations: Station[] = [];
+    let lastSearchPoint: Coordinates | null = null;
+    let lastSearchAt = 0;
+    let searchController: AbortController | null = null;
+    let permissionWarningShown = false;
+    let insideStationIds = new Set<string>();
+    const lastNotifiedAt = new Map<string, number>();
+
+    const notifyAtStation = (station: Station) => {
+      const now = Date.now();
+      if (now - (lastNotifiedAt.get(station.id) ?? 0) < 2 * 60 * 60 * 1000) return;
+      try {
+        const notification = new Notification("At a fuel station?", {
+          body: `You're near ${station.name}. Log your fill-up now in AutoLog.`,
+          tag: `autolog-fuel-stop-${station.id}`,
+        });
+        notification.onclick = () => {
+          window.focus();
+          setTab("fuel");
+          openModal("fuel");
+          notification.close();
+        };
+        lastNotifiedAt.set(station.id, now);
+        notify(`Near ${station.name}? Tap the notification to log fuel.`);
+      } catch {
+        // Browser notification support can disappear if a user revokes permission mid-session.
+      }
+    };
+
+    const checkForStation = (point: Coordinates) => {
+      const nearby = stations.filter((station) => distanceKm(point, station) <= 0.12);
+      const nextIds = new Set(nearby.map((station) => station.id));
+      for (const station of nearby) {
+        if (!insideStationIds.has(station.id)) notifyAtStation(station);
+      }
+      insideStationIds = nextIds;
+    };
+
+    const refreshStations = (point: Coordinates) => {
+      if (searchController) return;
+      if (lastSearchPoint
+        && (Date.now() - lastSearchAt < 120_000 || distanceKm(lastSearchPoint, point) < 1)) return;
+
+      const controller = new AbortController();
+      searchController = controller;
+      lastSearchPoint = point;
+      lastSearchAt = Date.now();
+      void findNearbyFuelStations(point, 2, controller.signal)
+        .then((found) => {
+          if (!active || controller.signal.aborted) return;
+          stations = found;
+          if (latestPosition) checkForStation(latestPosition);
+        })
+        .catch(() => {
+          // Map data is best-effort; keep watching and retry after the next movement window.
+        })
+        .finally(() => {
+          if (searchController === controller) searchController = null;
+        });
+    };
+
+    const watchId = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        if (coords.accuracy > 150) return;
+        latestPosition = { lat: coords.latitude, lon: coords.longitude };
+        checkForStation(latestPosition);
+        refreshStations(latestPosition);
+      },
+      (error) => {
+        if (error.code === 1 && !permissionWarningShown) {
+          permissionWarningShown = true;
+          notify("Allow location access in your browser to use fuel-stop reminders.");
+        }
+      },
+      { enableHighAccuracy: false, maximumAge: 30_000, timeout: 20_000 },
+    );
+
+    return () => {
+      active = false;
+      navigator.geolocation.clearWatch(watchId);
+      searchController?.abort();
+    };
+  }, [enabled, notify, openModal, setTab]);
+
+  return null;
+}
+
 /* --------------------------------- shell --------------------------------- */
 function Shell() {
   const { tab, vehicle, modal, toast, setTab } = useData();
@@ -303,6 +403,7 @@ function Shell() {
   return (
     <div className="min-h-dvh">
       <Header />
+      <FuelStationPromptWatcher />
 
       <main className="mx-auto w-full max-w-5xl px-4 pb-36 pt-5 sm:pt-7">
         {tab !== "garage" && vehicle && (
@@ -377,7 +478,7 @@ function DataScreen() {
 
   if (loadStatus === "loading") {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] text-[14px] font-medium text-neutral-500">
+      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-[14px] font-medium text-neutral-500">
         Loading your garage…
       </div>
     );
@@ -385,7 +486,7 @@ function DataScreen() {
 
   if (loadStatus === "error") {
     return (
-      <main className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5">
+      <main className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
         <div className="w-full max-w-md rounded-3xl bg-white p-7 text-center shadow-sm ring-1 ring-black/[0.05]">
           <h1 className="text-lg font-bold text-neutral-900">Couldn't load your cloud garage</h1>
           <p className="mt-2 text-sm leading-relaxed text-neutral-500">{loadError}</p>
@@ -423,7 +524,7 @@ function Root() {
 
   if (status === "loading") {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] text-[14px] font-medium text-neutral-500">
+      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-[14px] font-medium text-neutral-500">
         Loading AutoLog…
       </div>
     );

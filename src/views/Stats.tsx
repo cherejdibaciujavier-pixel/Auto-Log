@@ -47,6 +47,11 @@ export default function StatsView() {
     () => (vehicle ? monthlySeries(vehicle.id, data, 6) : null),
     [vehicle, data],
   );
+  const fleetComparison = useMemo(() => data.vehicles.map((item) => {
+    const itemExpenses = computeExpenses(item.id, data);
+    const itemFuelStats = computeFuelStats(data.fuel.filter((record) => record.vehicleId === item.id));
+    return { vehicle: item, expenses: itemExpenses, fuelStats: itemFuelStats };
+  }).sort((a, b) => b.expenses.allTime - a.expenses.allTime), [data]);
 
   if (!vehicle || !expenses || !series) return null;
   const isEV = vehicle.fuelType === "Electric";
@@ -208,6 +213,46 @@ export default function StatsView() {
           </div>
         </div>
       </div>
+
+      {fleetComparison.length > 1 && (
+        <section className="mt-5">
+          <SectionTitle>Compare vehicles</SectionTitle>
+          <p className="-mt-2 mb-3 text-[12.5px] text-neutral-400">Lifetime tracked costs and logged efficiency across your garage.</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {fleetComparison.map(({ vehicle: comparedVehicle, expenses: comparedExpenses, fuelStats: comparedFuel }) => (
+              <article key={comparedVehicle.id} className="rounded-[22px] bg-white p-4 ring-1 ring-black/[0.04]">
+                <h3 className="truncate text-[15px] font-bold text-neutral-900">{vehicleName(comparedVehicle)}</h3>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-[10.5px] font-semibold uppercase tracking-wide text-neutral-400">Total spend</p>
+                    <p className="mt-0.5 text-[17px] font-bold text-neutral-900">{fmtCurrency(comparedExpenses.allTime, settings.currency)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10.5px] font-semibold uppercase tracking-wide text-neutral-400">Cost / {settings.unit}</p>
+                    <p className="mt-0.5 text-[15px] font-bold text-neutral-900">
+                      {comparedExpenses.costPerKm !== null
+                        ? fmtCostPerDistance(comparedExpenses.costPerKm, settings)
+                        : "Not enough data"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10.5px] font-semibold uppercase tracking-wide text-neutral-400">Efficiency</p>
+                    <p className="mt-0.5 text-[14px] font-semibold text-neutral-800">
+                      {comparedFuel.avgConsumption
+                        ? fmtConsumption(comparedFuel.avgConsumption, settings, comparedVehicle.fuelType === "Electric")
+                        : "Log more fuel data"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10.5px] font-semibold uppercase tracking-wide text-neutral-400">This month</p>
+                    <p className="mt-0.5 text-[14px] font-semibold text-neutral-800">{fmtCurrency(comparedExpenses.thisMonth, settings.currency)}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ---------------------------- resale report ---------------------------- */}
       <div className="relative mt-3 overflow-hidden rounded-[26px] bg-neutral-900 p-6 text-white">
