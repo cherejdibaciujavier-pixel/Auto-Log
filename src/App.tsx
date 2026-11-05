@@ -474,7 +474,51 @@ function Shell() {
 
 /* ---------------------------- cloud data gate ---------------------------- */
 function DataScreen() {
-  const { loadStatus, loadError, retryLoad, isSaving, saveError, retrySave } = useData();
+  const { loadStatus, loadError, retryLoad, isSaving, saveError, retrySave, notify } = useData();
+  const { refreshSubscription } = useAuth();
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const checkoutState = url.searchParams.get("checkout");
+    const billingReturn = url.searchParams.get("billing");
+    if (!checkoutState && !billingReturn) return;
+    url.searchParams.delete("checkout");
+    url.searchParams.delete("session_id");
+    url.searchParams.delete("billing");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+
+    if (billingReturn === "return") {
+      void refreshSubscription();
+      notify("Billing settings updated.");
+      return;
+    }
+    if (checkoutState === "cancel") {
+      notify("Checkout was cancelled; no payment was taken.");
+      return;
+    }
+    if (checkoutState !== "success") return;
+
+    let cancelled = false;
+    let attempts = 0;
+    let timer = 0;
+    const confirmSubscription = async () => {
+      attempts += 1;
+      const active = await refreshSubscription();
+      if (cancelled) return;
+      if (active) {
+        notify("Payment confirmed — AutoLog Premium is active.");
+      } else if (attempts < 10) {
+        timer = window.setTimeout(confirmSubscription, 1500);
+      } else {
+        notify("Payment received. Premium activation is still syncing; please check again shortly.");
+      }
+    };
+    void confirmSubscription();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [notify, refreshSubscription]);
 
   if (loadStatus === "loading") {
     return (

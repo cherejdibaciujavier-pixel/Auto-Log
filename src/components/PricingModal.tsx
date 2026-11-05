@@ -1,21 +1,9 @@
 /* ------------------------------------------------------------------ */
-/*  AutoLog Premium — pricing, mock checkout and plan management.      */
-/*  Checkout is simulated client-side (no real charge). Connect        */
-/*  Stripe Checkout here in production and mirror the resulting        */
-/*  subscription onto the user record via webhook.                     */
+/*  AutoLog Premium — Stripe Checkout and subscription management.      */
 /* ------------------------------------------------------------------ */
 
 import { useState } from "react";
-import {
-  BadgeCheck,
-  Check,
-  CreditCard,
-  Crown,
-  Loader2,
-  Lock,
-  RefreshCcw,
-  XCircle,
-} from "lucide-react";
+import { Check, Crown, ExternalLink, Loader2 } from "lucide-react";
 import {
   FREE_FEATURES,
   PLAN_PRICES,
@@ -25,65 +13,57 @@ import {
 } from "../store/AuthContext";
 import { useData } from "../store/DataContext";
 import { fmtDate } from "../lib/utils";
-import { Field, Modal, inputCls } from "./ui";
+import { Modal, inputCls } from "./ui";
 import { cn } from "../utils/cn";
 
-type Step = "plans" | "checkout" | "processing" | "success";
-
-/* input formatters for the mock card form */
-const fmtCard = (v: string) =>
-  v.replace(/\D/g, "").slice(0, 19).replace(/(.{4})/g, "$1 ").trim();
-const fmtExpiry = (v: string) => {
-  const d = v.replace(/\D/g, "").slice(0, 4);
-  return d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
-};
 
 export default function PricingModal() {
-  const { closeModal, notify } = useData();
+  const { closeModal } = useData();
   const {
     user,
     status,
     isPremium,
     lifetimePremium,
     redeemLifetimeCode,
-    subscribe,
-    setAutoRenew,
+    createCheckoutSession,
+    createBillingPortalSession,
     exitToAuth,
   } = useAuth();
 
   const [cycle, setCycle] = useState<PlanCycle>(
     user?.subscription?.cycle ?? "yearly",
   );
-  const [step, setStep] = useState<Step>("plans");
-  const [cardName, setCardName] = useState("");
-  const [cardNum, setCardNum] = useState("");
-  const [expiry, setExpiry] = useState("");
-  const [cvc, setCvc] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [promoCode, setPromoCode] = useState("");
   const [redeemingCode, setRedeemingCode] = useState(false);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [portalBusy, setPortalBusy] = useState(false);
 
   const sub = user?.subscription ?? null;
 
-  const startCheckout = () => {
-    if (!user) return; // guests are prompted to create an account first
+  const startCheckout = async () => {
+    if (!user) return;
     setError(null);
-    setStep("checkout");
+    setCheckoutBusy(true);
+    const result = await createCheckoutSession(cycle);
+    if (result.error || !result.url) {
+      setError(result.error ?? "Couldn't start secure checkout.");
+      setCheckoutBusy(false);
+      return;
+    }
+    window.location.assign(result.url);
   };
 
-  const pay = () => {
-    const digits = cardNum.replace(/\D/g, "");
-    if (cardName.trim().length < 2) return setError("Enter the name on the card.");
-    if (digits.length < 15) return setError("Enter a valid card number (try 4242 4242 4242 4242).");
-    if (!/^\d{2}\/\d{2}$/.test(expiry)) return setError("Enter the expiry as MM/YY.");
-    if (cvc.replace(/\D/g, "").length < 3) return setError("Enter the 3-digit CVC.");
+  const manageBilling = async () => {
     setError(null);
-    setStep("processing");
-    // Simulated payment processing → activate subscription.
-    window.setTimeout(() => {
-      subscribe(cycle);
-      setStep("success");
-    }, 1400);
+    setPortalBusy(true);
+    const result = await createBillingPortalSession();
+    if (result.error || !result.url) {
+      setError(result.error ?? "Couldn't open billing management.");
+      setPortalBusy(false);
+      return;
+    }
+    window.location.assign(result.url);
   };
 
   return (
@@ -106,9 +86,20 @@ export default function PricingModal() {
               </li>
             ))}
           </ul>
+          {sub && (
+            <button
+              onClick={manageBilling}
+              disabled={portalBusy}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-white/15 py-3 text-[14px] font-semibold text-white transition hover:bg-white/25 disabled:opacity-60"
+            >
+              {portalBusy ? <Loader2 size={16} className="animate-spin" /> : <ExternalLink size={15} />}
+              Manage recurring subscription
+            </button>
+          )}
+          {error && <p role="alert" className="mt-2 text-center text-[12.5px] font-medium text-red-600">{error}</p>}
           <button
             onClick={closeModal}
-            className="mt-5 w-full rounded-full bg-white py-3 text-[15px] font-semibold text-[#0071e3] transition hover:bg-blue-50"
+            className="mt-3 w-full rounded-full bg-white py-3 text-[15px] font-semibold text-[#0071e3] transition hover:bg-blue-50"
           >
             Done
           </button>
@@ -131,64 +122,18 @@ export default function PricingModal() {
                 : `Active until ${fmtDate(sub.currentPeriodEnd)} — will not renew`}
             </p>
           </div>
-
-          <div className="mt-4 space-y-2">
-            <p className="text-[12.5px] font-medium uppercase tracking-wide text-neutral-400">
-              Billing cycle
-            </p>
-            <div className="flex rounded-full bg-[#f5f5f7] p-1">
-              {(["monthly", "yearly"] as PlanCycle[]).map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setCycle(c)}
-                  className={cn(
-                    "flex-1 rounded-full py-2 text-[13.5px] font-medium capitalize transition",
-                    cycle === c
-                      ? "bg-white text-neutral-900 shadow-sm"
-                      : "text-neutral-500",
-                  )}
-                >
-                  {c} · €{PLAN_PRICES[c].total.toFixed(2)}
-                </button>
-              ))}
-            </div>
-            {cycle !== sub.cycle && (
-              <button
-                onClick={() => {
-                  subscribe(cycle);
-                  notify(`Billing switched to ${cycle}`);
-                }}
-                className="flex w-full items-center justify-center gap-2 rounded-full bg-[#0071e3] py-3 text-[14.5px] font-semibold text-white transition hover:bg-[#0077ed]"
-              >
-                <RefreshCcw size={15} /> Switch to {cycle} billing
-              </button>
-            )}
-            {sub.autoRenew ? (
-              <button
-                onClick={() => {
-                  setAutoRenew(false);
-                  notify("Auto-renew turned off");
-                }}
-                className="flex w-full items-center justify-center gap-2 rounded-full bg-red-50 py-3 text-[14.5px] font-semibold text-red-600 transition hover:bg-red-100"
-              >
-                <XCircle size={15} /> Cancel subscription
-              </button>
-            ) : (
-              <button
-                onClick={() => {
-                  setAutoRenew(true);
-                  notify("Auto-renew resumed");
-                }}
-                className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-50 py-3 text-[14.5px] font-semibold text-emerald-600 transition hover:bg-emerald-100"
-              >
-                <RefreshCcw size={15} /> Resume auto-renew
-              </button>
-            )}
-            <p className="pt-1 text-center text-[12px] leading-relaxed text-neutral-400">
-              Cancelling keeps Premium until {fmtDate(sub.currentPeriodEnd)}.
-              No questions asked.
-            </p>
-          </div>
+          <button
+            onClick={manageBilling}
+            disabled={portalBusy}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-[#0071e3] py-3 text-[14.5px] font-semibold text-white transition hover:bg-[#0077ed] disabled:opacity-60"
+          >
+            {portalBusy ? <Loader2 size={16} className="animate-spin" /> : <ExternalLink size={15} />}
+            Manage billing in Stripe
+          </button>
+          {error && <p role="alert" className="mt-2 text-center text-[12.5px] font-medium text-red-600">{error}</p>}
+          <p className="mt-3 text-center text-[12px] leading-relaxed text-neutral-400">
+            Update your payment method, change plans, or cancel securely through Stripe.
+          </p>
           <div className="mt-5 rounded-2xl bg-[#f5f5f7] p-4">
             <p className="text-[13.5px] font-semibold text-neutral-800">Have a lifetime Premium code?</p>
             <div className="mt-2 flex gap-2">
@@ -221,10 +166,25 @@ export default function PricingModal() {
                 {redeemingCode ? <Loader2 size={16} className="animate-spin" /> : "Redeem"}
               </button>
             </div>
-            {error && <p role="alert" className="mt-2 text-[12.5px] font-medium text-red-600">{error}</p>}
           </div>
         </div>
-      ) : step === "plans" ? (
+      ) : sub && ["past_due", "unpaid"].includes(sub.status) ? (
+        <div className="rounded-[22px] bg-amber-50 p-5 text-center ring-1 ring-amber-200">
+          <h3 className="text-[18px] font-bold text-neutral-900">Payment needs attention</h3>
+          <p className="mt-1.5 text-[13.5px] leading-relaxed text-neutral-600">
+            Update your payment method in Stripe to restore or keep Premium active.
+          </p>
+          <button
+            onClick={manageBilling}
+            disabled={portalBusy}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-[#0071e3] py-3 text-[14.5px] font-semibold text-white transition hover:bg-[#0077ed] disabled:opacity-60"
+          >
+            {portalBusy ? <Loader2 size={16} className="animate-spin" /> : <ExternalLink size={15} />}
+            Update billing in Stripe
+          </button>
+          {error && <p role="alert" className="mt-2 text-[12.5px] font-medium text-red-600">{error}</p>}
+        </div>
+      ) : (
         /* -------------------------------- plans -------------------------------- */
         <div>
           <p className="text-[14px] leading-relaxed text-neutral-500">
@@ -275,9 +235,6 @@ export default function PricingModal() {
               >
                 Sign in to redeem a code
               </button>
-            )}
-            {error && step === "plans" && (
-              <p role="alert" className="mt-2 text-[12.5px] font-medium text-red-600">{error}</p>
             )}
           </div>
 
@@ -351,14 +308,18 @@ export default function PricingModal() {
               ) : (
                 <button
                   onClick={startCheckout}
-                  className="flex w-full items-center justify-center gap-2 rounded-full bg-[#0071e3] py-3 text-[15px] font-semibold text-white transition hover:bg-[#0077ed]"
+                  disabled={checkoutBusy}
+                  className="flex w-full items-center justify-center gap-2 rounded-full bg-[#0071e3] py-3 text-[15px] font-semibold text-white transition hover:bg-[#0077ed] disabled:opacity-60"
                 >
-                  <Crown size={16} /> Upgrade to Premium
+                  {checkoutBusy ? <Loader2 size={17} className="animate-spin" /> : <Crown size={16} />}
+                  {checkoutBusy ? "Opening secure checkout…" : `Continue to secure checkout · €${PLAN_PRICES[cycle].total.toFixed(2)}`}
                 </button>
               )}
             </div>
           </div>
 
+              {error && <p role="alert" className="mt-3 text-center text-[12.5px] font-medium text-red-600">{error}</p>}
+              <p className="mt-2 text-center text-[11.5px] text-neutral-400">Payments are processed securely by Stripe. Auto-renews until cancelled.</p>
           {/* free card */}
           <div className="mt-3 rounded-[22px] bg-[#f5f5f7] px-5 py-4">
             <div className="flex items-center justify-between">
@@ -376,93 +337,6 @@ export default function PricingModal() {
               ))}
             </ul>
           </div>
-        </div>
-      ) : step === "checkout" || step === "processing" ? (
-        /* ------------------------------- checkout ------------------------------- */
-        <div>
-          <div className="flex items-center justify-between rounded-2xl bg-[#f5f5f7] px-4 py-3">
-            <span className="text-[13.5px] font-medium text-neutral-600">
-              AutoLog Premium · {cycle}
-            </span>
-            <span className="text-[15px] font-bold text-neutral-900">
-              €{PLAN_PRICES[cycle].total.toFixed(2)}
-            </span>
-          </div>
-
-          <div className="mt-4 space-y-3.5">
-            <Field label="Name on card">
-              <div className="relative">
-                <CreditCard size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
-                <input className={cn(inputCls, "pl-10")} placeholder="Alex Morgan" value={cardName} onChange={(e) => setCardName(e.target.value)} autoComplete="cc-name" />
-              </div>
-            </Field>
-            <Field label="Card number" hint="Demo checkout — use 4242 4242 4242 4242. Nothing is charged.">
-              <input className={inputCls} placeholder="4242 4242 4242 4242" inputMode="numeric" value={cardNum} onChange={(e) => setCardNum(fmtCard(e.target.value))} autoComplete="cc-number" />
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Expiry">
-                <input className={inputCls} placeholder="MM/YY" inputMode="numeric" value={expiry} onChange={(e) => setExpiry(fmtExpiry(e.target.value))} autoComplete="cc-exp" />
-              </Field>
-              <Field label="CVC">
-                <input className={inputCls} placeholder="123" inputMode="numeric" value={cvc} onChange={(e) => setCvc(e.target.value.replace(/\D/g, "").slice(0, 4))} autoComplete="cc-csc" />
-              </Field>
-            </div>
-          </div>
-
-          {error && (
-            <p className="mt-3 rounded-xl bg-red-50 px-3 py-2.5 text-[13px] font-medium text-red-600">
-              {error}
-            </p>
-          )}
-
-          <button
-            onClick={pay}
-            disabled={step === "processing"}
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-[#0071e3] py-3 text-[15px] font-semibold text-white transition hover:bg-[#0077ed] disabled:opacity-60"
-          >
-            {step === "processing" ? (
-              <>
-                <Loader2 size={17} className="animate-spin" /> Processing payment…
-              </>
-            ) : (
-              <>
-                <Lock size={15} /> Subscribe · €{PLAN_PRICES[cycle].total.toFixed(2)}
-              </>
-            )}
-          </button>
-          <button
-            onClick={() => setStep("plans")}
-            disabled={step === "processing"}
-            className="mt-2 w-full py-2 text-[13.5px] font-medium text-neutral-500 transition hover:text-neutral-800 disabled:opacity-50"
-          >
-            Back to plans
-          </button>
-          <p className="text-center text-[11.5px] text-neutral-400">
-            Secure demo checkout · Auto-renews · Cancel anytime
-          </p>
-        </div>
-      ) : (
-        /* ------------------------------- success ------------------------------- */
-        <div className="py-4 text-center">
-          <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-500">
-            <BadgeCheck size={32} />
-          </span>
-          <h3 className="mt-4 text-[20px] font-bold tracking-tight text-neutral-900">
-            Welcome to Premium
-          </h3>
-          <p className="mx-auto mt-1.5 max-w-xs text-[13.5px] leading-relaxed text-neutral-500">
-            Unlimited vehicles, PDF resale reports and full backups are now
-            unlocked on your account.
-          </p>
-          <button
-            onClick={() => {
-              closeModal();
-              notify("AutoLog Premium activated");
-            }}
-            className="mt-5 w-full rounded-full bg-[#0071e3] py-3 text-[15px] font-semibold text-white transition hover:bg-[#0077ed]"
-          >
-            Start exploring
-          </button>
         </div>
       )}
     </Modal>

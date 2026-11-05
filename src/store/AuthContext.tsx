@@ -25,6 +25,7 @@ export interface Subscription {
   autoRenew: boolean;
   startedAt: string;
   currentPeriodEnd: string;
+  status: string;
 }
 
 export interface UserAccount {
@@ -46,11 +47,15 @@ export const FREE_VEHICLE_LIMIT = 1;
 
 type AuthStatus = "loading" | "anon" | "guest" | "authed";
 type AuthResult = { error: string | null; message?: string };
+type UrlResult = { url: string | null; error: string | null };
 
-interface LocalAccountState {
-  plan: "free" | "premium";
-  subscription: Subscription | null;
-}
+type SubscriptionRow = {
+  billing_cycle: string;
+  cancel_at_period_end: boolean;
+  current_period_end: string | null;
+  created_at: string;
+  status: string;
+};
 
 interface AuthContextValue {
   status: AuthStatus;
@@ -65,14 +70,14 @@ interface AuthContextValue {
   exitToAuth: () => void;
   updateProfile: (name: string) => Promise<string | null>;
   changePassword: (current: string, next: string) => Promise<string | null>;
-  subscribe: (cycle: PlanCycle) => void;
-  setAutoRenew: (on: boolean) => void;
+  createCheckoutSession: (cycle: PlanCycle) => Promise<UrlResult>;
+  createBillingPortalSession: () => Promise<UrlResult>;
+  refreshSubscription: () => Promise<boolean>;
   deleteAccount: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const GUEST_SESSION_KEY = "autolog-session-v2";
-const ACCOUNT_STATE_PREFIX = "autolog-account-v1:";
 
 function loadGuestSession(): boolean {
   try {
@@ -92,38 +97,25 @@ function saveGuestSession(active: boolean) {
   }
 }
 
-function accountStateKey(userId: string) {
-  return `${ACCOUNT_STATE_PREFIX}${userId}`;
+function subscriptionFromRow(row: SubscriptionRow | null): Subscription | null {
+  if (!row || (row.billing_cycle !== "monthly" && row.billing_cycle !== "yearly")) return null;
+  return {
+    cycle: row.billing_cycle,
+    autoRenew: !row.cancel_at_period_end,
+    startedAt: row.created_at.slice(0, 10),
+    currentPeriodEnd: row.current_period_end?.slice(0, 10) ?? "",
+    status: row.status,
+  };
 }
 
-function readAccountState(userId: string): LocalAccountState {
-  try {
-    const raw = localStorage.getItem(accountStateKey(userId));
-    if (raw) return JSON.parse(raw) as LocalAccountState;
-  } catch {
-    // Ignore stale or malformed local account preferences.
-  }
-  return { plan: "free", subscription: null };
-}
-
-function persistAccountState(userId: string, state: LocalAccountState) {
-  try {
-    localStorage.setItem(accountStateKey(userId), JSON.stringify(state));
-  } catch {
-    // Account authentication is independent of optional local preferences.
-  }
-}
-
-function addMonthsISO(iso: string, months: number): string {
-  const [year, month, day] = iso.split("-").map(Number);
-  const date = new Date(year, month - 1 + months, day);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+function hasActiveSubscription(subscription: Subscription | null): boolean {
+  if (!subscription || !["active", "trialing", "past_due"].includes(subscription.status)) return false;
+  return Boolean(subscription.currentPeriodEnd && new Date(`${subscription.currentPeriodEnd}T23:59:59`).getTime() >= Date.now());
 }
 
 function accountFromAuthUser(
   authUser: User,
-  localState: LocalAccountState,
+  subscription: Subscription | null,
   lifetimePremium: boolean,
 ): UserAccount {
   const metadataName = authUser.user_metadata?.full_name;
@@ -135,8 +127,8 @@ function accountFromAuthUser(
       : email.split("@")[0] || "AutoLog driver",
     email,
     createdAt: authUser.created_at?.slice(0, 10) ?? todayISO(),
-    plan: localState.plan,
-    subscription: localState.subscription,
+    plan: lifetimePremium || hasActiveSubscription(subscription) ? "premium" : "free",
+    subscription,
     lifetimePremium,
   };
 }
@@ -152,11 +144,24 @@ function friendlyAuthError(message: string): string {
   return message;
 }
 
+async function edgeFunctionErrorMessage(error: unknown, fallback: string): Promise<string> {
+  const response = (error as { context?: unknown } | null)?.context;
+  if (response instanceof Response) {
+    try {
+      const body = await response.clone().json() as { error?: unknown };
+      if (typeof body.error === "string") return body.error;
+    } catch {
+      // Use the fallback below when the function didn't return JSON.
+    }
+  }
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const [guest, setGuest] = useState(false);
-  const [accountStates, setAccountStates] = useState<Record<string, LocalAccountState>>({});
+  const [subscriptions, setSubscriptions] = useState<Record<string, Subscription | null>>({});
   const [lifetimeEntitlements, setLifetimeEntitlements] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -168,10 +173,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (nextUser) {
         setGuest(false);
         saveGuestSession(false);
-        setAccountStates((states) => ({
-          ...states,
-          [nextUser.id]: states[nextUser.id] ?? readAccountState(nextUser.id),
-        }));
       }
       setReady(true);
     });
@@ -184,10 +185,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (nextUser) {
         setGuest(false);
         saveGuestSession(false);
-        setAccountStates((states) => ({
-          ...states,
-          [nextUser.id]: states[nextUser.id] ?? readAccountState(nextUser.id),
-        }));
       } else {
         setGuest(loadGuestSession());
       }
@@ -223,15 +220,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { active = false; };
   }, [authUser?.id]);
 
-  const localState = authUser
-    ? accountStates[authUser.id] ?? readAccountState(authUser.id)
-    : { plan: "free" as const, subscription: null };
+  const refreshSubscription = useCallback(async (): Promise<boolean> => {
+    if (!authUser) return false;
+    const { data, error } = await supabase
+      .from("user_subscriptions")
+      .select("billing_cycle,cancel_at_period_end,current_period_end,created_at,status")
+      .eq("user_id", authUser.id)
+      .maybeSingle();
+    if (error) {
+      console.error("Unable to load subscription status", error);
+      return false;
+    }
+    const subscription = subscriptionFromRow(data as SubscriptionRow | null);
+    setSubscriptions((current) => ({ ...current, [authUser.id]: subscription }));
+    return hasActiveSubscription(subscription);
+  }, [authUser]);
+
+  useEffect(() => {
+    if (authUser) void refreshSubscription();
+  }, [authUser?.id, refreshSubscription]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    const onFocus = () => { void refreshSubscription(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [authUser?.id, refreshSubscription]);
+
+  const subscription = authUser ? subscriptions[authUser.id] ?? null : null;
   const lifetimePremium = authUser
     ? lifetimeEntitlements[authUser.id] === true
     : false;
   const user = useMemo(
-    () => authUser ? accountFromAuthUser(authUser, localState, lifetimePremium) : null,
-    [authUser, localState, lifetimePremium],
+    () => authUser ? accountFromAuthUser(authUser, subscription, lifetimePremium) : null,
+    [authUser, subscription, lifetimePremium],
   );
   const status: AuthStatus = !ready
     ? "loading"
@@ -240,7 +262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : guest
         ? "guest"
         : "anon";
-  const isPremium = user?.plan === "premium" || lifetimePremium;
+  const isPremium = lifetimePremium || hasActiveSubscription(subscription);
 
   const signUp = useCallback(async (name: string, email: string, password: string): Promise<AuthResult> => {
     const cleanName = name.trim();
@@ -314,37 +336,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return error ? friendlyAuthError(error.message) : null;
   }, [authUser]);
 
-  const updateLocalAccount = useCallback((userId: string, next: LocalAccountState) => {
-    persistAccountState(userId, next);
-    setAccountStates((states) => ({ ...states, [userId]: next }));
-  }, []);
-
-  const subscribe = useCallback((cycle: PlanCycle) => {
-    if (!authUser) return;
-    const existing = accountStates[authUser.id] ?? readAccountState(authUser.id);
-    const today = todayISO();
-    updateLocalAccount(authUser.id, {
-      plan: "premium",
-      subscription: {
-        cycle,
-        autoRenew: true,
-        startedAt: existing.subscription?.startedAt ?? today,
-        currentPeriodEnd: addMonthsISO(today, cycle === "monthly" ? 1 : 12),
-      },
-    });
-  }, [accountStates, authUser, updateLocalAccount]);
-
-  const setAutoRenew = useCallback((on: boolean) => {
-    if (!authUser) return;
-    const existing = accountStates[authUser.id] ?? readAccountState(authUser.id);
-    if (!existing.subscription) return;
-    const subscription = { ...existing.subscription, autoRenew: on };
-    if (!on && subscription.currentPeriodEnd < todayISO()) {
-      updateLocalAccount(authUser.id, { plan: "free", subscription: null });
-      return;
+  const createCheckoutSession = useCallback(async (cycle: PlanCycle): Promise<UrlResult> => {
+    if (!authUser) return { url: null, error: "Sign in to subscribe to AutoLog Premium." };
+    try {
+      const { data, error } = await supabase.functions.invoke("create-checkout-session", {
+        body: { cycle },
+      });
+      if (error) {
+        return { url: null, error: await edgeFunctionErrorMessage(error, "Couldn't start secure checkout.") };
+      }
+      if (typeof data?.url !== "string") {
+        return { url: null, error: data?.error ?? "Stripe didn't return a checkout link. Please try again." };
+      }
+      return { url: data.url, error: null };
+    } catch {
+      return { url: null, error: "Couldn't connect to secure checkout. Check your connection and try again." };
     }
-    updateLocalAccount(authUser.id, { ...existing, subscription });
-  }, [accountStates, authUser, updateLocalAccount]);
+  }, [authUser]);
+
+  const createBillingPortalSession = useCallback(async (): Promise<UrlResult> => {
+    if (!authUser) return { url: null, error: "Sign in to manage your subscription." };
+    try {
+      const { data, error } = await supabase.functions.invoke("create-billing-portal-session");
+      if (error) {
+        return { url: null, error: await edgeFunctionErrorMessage(error, "Couldn't open billing management.") };
+      }
+      if (typeof data?.url !== "string") {
+        return { url: null, error: data?.error ?? "Stripe didn't return a billing link. Please try again." };
+      }
+      return { url: data.url, error: null };
+    } catch {
+      return { url: null, error: "Couldn't connect to billing management. Check your connection and try again." };
+    }
+  }, [authUser]);
 
   const redeemLifetimeCode = useCallback(async (code: string): Promise<string | null> => {
     if (!authUser) return "Sign in to redeem a Premium code.";
@@ -381,7 +405,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) return `Account deletion failed: ${error.message}`;
     try {
       localStorage.removeItem(`autolog-db-v2:${authUser.id}`);
-      localStorage.removeItem(accountStateKey(authUser.id));
     } catch {
       // The account is already deleted; local cleanup is best effort.
     }
@@ -402,8 +425,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     exitToAuth,
     updateProfile,
     changePassword,
-    subscribe,
-    setAutoRenew,
+    createCheckoutSession,
+    createBillingPortalSession,
+    refreshSubscription,
     deleteAccount,
   };
 
