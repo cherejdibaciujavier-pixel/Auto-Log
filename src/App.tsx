@@ -2,8 +2,8 @@
 /*  AutoLog — application shell.                                       */
 /*                                                                     */
 /*  Root decides between the auth screen and the app itself. Each      */
-/*  account (or the guest profile) gets an isolated DataProvider       */
-/*  keyed by storageId, so garages never leak between users.           */
+/*  signed-in account gets its own cloud garage; guest data stays only  */
+/*  in memory for the current session.                                 */
 /* ------------------------------------------------------------------ */
 
 import { useState } from "react";
@@ -362,19 +362,75 @@ function Shell() {
   );
 }
 
+/* ---------------------------- cloud data gate ---------------------------- */
+function DataScreen() {
+  const { loadStatus, loadError, retryLoad, isSaving, saveError, retrySave } = useData();
+
+  if (loadStatus === "loading") {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] text-[14px] font-medium text-neutral-500">
+        Loading your garage…
+      </div>
+    );
+  }
+
+  if (loadStatus === "error") {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] px-5">
+        <div className="w-full max-w-md rounded-3xl bg-white p-7 text-center shadow-sm ring-1 ring-black/[0.05]">
+          <h1 className="text-lg font-bold text-neutral-900">Couldn't load your cloud garage</h1>
+          <p className="mt-2 text-sm leading-relaxed text-neutral-500">{loadError}</p>
+          <button
+            onClick={retryLoad}
+            className="mt-5 rounded-full bg-[#0071e3] px-6 py-3 text-sm font-semibold text-white hover:bg-[#0077ed]"
+          >
+            Try again
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <>
+      <Shell />
+      {(isSaving || saveError) && (
+        <div className="fixed left-1/2 top-[70px] z-[90] flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-full bg-neutral-900 px-4 py-2.5 text-[12px] font-medium text-white shadow-xl">
+          <span className="truncate">{saveError ? "Couldn't save your changes to the cloud." : "Saving to your cloud garage…"}</span>
+          {saveError && (
+            <button onClick={retrySave} className="shrink-0 font-bold text-sky-300 underline">
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 /* ---------------------------------- root ---------------------------------- */
 function Root() {
   const { status, user } = useAuth();
 
+  if (status === "loading") {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-[#f5f5f7] text-[14px] font-medium text-neutral-500">
+        Loading AutoLog…
+      </div>
+    );
+  }
+
   // Not signed in and not browsing as guest → auth gate.
   if (status === "anon") return <AuthScreen />;
 
-  // Keying by identity remounts the data layer per account/guest,
-  // each with its own localStorage database and completely empty start.
-  const storageId = status === "authed" && user ? user.id : "guest";
+  const cloudUserId = status === "authed" && user ? user.id : undefined;
   return (
-    <DataProvider key={storageId} storageId={storageId}>
-      <Shell />
+    <DataProvider
+      key={cloudUserId ?? "guest"}
+      cloudUserId={cloudUserId}
+      cloudEmail={cloudUserId ? user?.email : undefined}
+    >
+      <DataScreen />
     </DataProvider>
   );
 }

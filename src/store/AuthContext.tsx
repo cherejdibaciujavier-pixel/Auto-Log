@@ -1,24 +1,22 @@
 /* ------------------------------------------------------------------ */
-/*  AutoLog — account & subscription store (local, zero-backend).      */
+/*  AutoLog — Supabase authentication and account state.                */
 /*                                                                     */
-/*  Users, sessions and subscriptions live in localStorage so the      */
-/*  whole flow works offline. Passwords are only lightly hashed —      */
-/*  in production swap this provider for Supabase Auth / Firebase      */
-/*  (the public interface below stays identical).                      */
-/*                                                                     */
-/*  Data isolation: each account gets its own vehicle database         */
-/*  (see DataProvider `storageId`), guests get a shared "guest" one.   */
+/*  Credentials and sessions are handled by Supabase Auth. Signed-in   */
+/*  vehicle data is synced to the Supabase database.                    */
 /* ------------------------------------------------------------------ */
 
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
-import { todayISO, uid } from "../lib/utils";
+import type { User } from "@supabase/supabase-js";
+import { todayISO } from "../lib/utils";
+import { supabase } from "../lib/supabase";
 
 export type PlanCycle = "monthly" | "yearly";
 
@@ -26,7 +24,6 @@ export interface Subscription {
   cycle: PlanCycle;
   autoRenew: boolean;
   startedAt: string;
-  /** Premium stays active until this date (even after cancelling). */
   currentPeriodEnd: string;
 }
 
@@ -34,7 +31,6 @@ export interface UserAccount {
   id: string;
   name: string;
   email: string;
-  passwordHash: string;
   createdAt: string;
   plan: "free" | "premium";
   subscription: Subscription | null;
@@ -45,255 +41,286 @@ export const PLAN_PRICES: Record<PlanCycle, { total: number; perMonth: number }>
   yearly: { total: 39.99, perMonth: 3.33 },
 };
 
-/** Free-tier limits (Premium = unlimited). */
 export const FREE_VEHICLE_LIMIT = 1;
 
-const USERS_KEY = "autolog-users-v2";
-const SESSION_KEY = "autolog-session-v2";
+type AuthStatus = "loading" | "anon" | "guest" | "authed";
+type AuthResult = { error: string | null; message?: string };
 
-type AuthStatus = "anon" | "guest" | "authed";
-
-interface Session {
-  mode: "user" | "guest";
-  userId?: string;
-}
-
-/* Demo-grade password hashing (NOT secure — replace with a real auth
-   provider server-side hash in production). */
-function hashPw(pw: string): string {
-  let h = 5381;
-  for (let i = 0; i < pw.length; i++) h = ((h << 5) + h + pw.charCodeAt(i)) | 0;
-  return `h${(h >>> 0).toString(16)}`;
-}
-
-function addMonthsISO(iso: string, months: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  const date = new Date(y, m - 1 + months, d);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-/**
- * Resolve time-based subscription state: simulate auto-renew charges
- * and expire cancelled plans whose paid period has ended.
- */
-function resolveUser(u: UserAccount): UserAccount {
-  if (u.plan !== "premium" || !u.subscription) return u;
-  const today = todayISO();
-  let { currentPeriodEnd } = u.subscription;
-  if (currentPeriodEnd >= today) return u;
-  if (!u.subscription.autoRenew) {
-    return { ...u, plan: "free", subscription: null };
-  }
-  // Auto-renew: roll the period forward (mock charge) until current.
-  let guard = 0;
-  while (currentPeriodEnd < today && guard++ < 240) {
-    currentPeriodEnd = addMonthsISO(
-      currentPeriodEnd,
-      u.subscription.cycle === "monthly" ? 1 : 12,
-    );
-  }
-  return {
-    ...u,
-    subscription: { ...u.subscription, currentPeriodEnd },
-  };
-}
-
-function loadUsers(): UserAccount[] {
-  try {
-    const raw = localStorage.getItem(USERS_KEY);
-    if (raw) {
-      const parsed = (JSON.parse(raw) as UserAccount[]).map(resolveUser);
-      return parsed;
-    }
-  } catch {
-    /* ignore */
-  }
-  return [];
-}
-
-function loadSession(): Session | null {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (raw) return JSON.parse(raw) as Session;
-  } catch {
-    /* ignore */
-  }
-  return null;
+interface LocalAccountState {
+  plan: "free" | "premium";
+  subscription: Subscription | null;
 }
 
 interface AuthContextValue {
   status: AuthStatus;
   user: UserAccount | null;
   isPremium: boolean;
-  signUp: (name: string, email: string, password: string) => string | null;
-  signIn: (email: string, password: string) => string | null;
-  signOut: () => void;
+  signUp: (name: string, email: string, password: string) => Promise<AuthResult>;
+  signIn: (email: string, password: string) => Promise<AuthResult>;
+  signOut: () => Promise<void>;
   continueAsGuest: () => void;
-  /** Leave guest mode and go back to the sign-in screen. */
   exitToAuth: () => void;
-  updateProfile: (name: string) => void;
-  changePassword: (current: string, next: string) => string | null;
+  updateProfile: (name: string) => Promise<string | null>;
+  changePassword: (current: string, next: string) => Promise<string | null>;
   subscribe: (cycle: PlanCycle) => void;
   setAutoRenew: (on: boolean) => void;
-  deleteAccount: () => void;
+  deleteAccount: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const GUEST_SESSION_KEY = "autolog-session-v2";
+const ACCOUNT_STATE_PREFIX = "autolog-account-v1:";
+
+function loadGuestSession(): boolean {
+  try {
+    const session = JSON.parse(localStorage.getItem(GUEST_SESSION_KEY) ?? "null");
+    return session?.mode === "guest";
+  } catch {
+    return false;
+  }
+}
+
+function saveGuestSession(active: boolean) {
+  try {
+    if (active) localStorage.setItem(GUEST_SESSION_KEY, JSON.stringify({ mode: "guest" }));
+    else localStorage.removeItem(GUEST_SESSION_KEY);
+  } catch {
+    // The browser can still use the app for the current session.
+  }
+}
+
+function accountStateKey(userId: string) {
+  return `${ACCOUNT_STATE_PREFIX}${userId}`;
+}
+
+function readAccountState(userId: string): LocalAccountState {
+  try {
+    const raw = localStorage.getItem(accountStateKey(userId));
+    if (raw) return JSON.parse(raw) as LocalAccountState;
+  } catch {
+    // Ignore stale or malformed local account preferences.
+  }
+  return { plan: "free", subscription: null };
+}
+
+function persistAccountState(userId: string, state: LocalAccountState) {
+  try {
+    localStorage.setItem(accountStateKey(userId), JSON.stringify(state));
+  } catch {
+    // Account authentication is independent of optional local preferences.
+  }
+}
+
+function addMonthsISO(iso: string, months: number): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(year, month - 1 + months, day);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function accountFromAuthUser(authUser: User, localState: LocalAccountState): UserAccount {
+  const metadataName = authUser.user_metadata?.full_name;
+  const email = authUser.email ?? "";
+  return {
+    id: authUser.id,
+    name: typeof metadataName === "string" && metadataName.trim()
+      ? metadataName.trim()
+      : email.split("@")[0] || "AutoLog driver",
+    email,
+    createdAt: authUser.created_at?.slice(0, 10) ?? todayISO(),
+    plan: localState.plan,
+    subscription: localState.subscription,
+  };
+}
+
+function friendlyAuthError(message: string): string {
+  if (/invalid login credentials/i.test(message)) return "Incorrect email or password.";
+  if (/user already registered/i.test(message)) return "An account with this email already exists. Try signing in.";
+  if (/password should be at least/i.test(message)) return "Password must be at least 6 characters.";
+  if (/email not confirmed/i.test(message)) return "Please confirm your email before signing in.";
+  return message;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [users, setUsers] = useState<UserAccount[]>(loadUsers);
-  const [session, setSession] = useState<Session | null>(loadSession);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [ready, setReady] = useState(false);
+  const [guest, setGuest] = useState(false);
+  const [accountStates, setAccountStates] = useState<Record<string, LocalAccountState>>({});
 
-  const persistUsers = (next: UserAccount[]) => {
-    setUsers(next);
-    try {
-      localStorage.setItem(USERS_KEY, JSON.stringify(next));
-    } catch {
-      /* storage unavailable */
-    }
-  };
-  const persistSession = (next: Session | null) => {
-    setSession(next);
-    try {
-      if (next) localStorage.setItem(SESSION_KEY, JSON.stringify(next));
-      else localStorage.removeItem(SESSION_KEY);
-    } catch {
-      /* storage unavailable */
-    }
-  };
+  useEffect(() => {
+    let active = true;
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      const nextUser = session?.user ?? null;
+      setAuthUser(nextUser);
+      if (nextUser) {
+        setGuest(false);
+        saveGuestSession(false);
+        setAccountStates((states) => ({
+          ...states,
+          [nextUser.id]: states[nextUser.id] ?? readAccountState(nextUser.id),
+        }));
+      }
+      setReady(true);
+    });
 
-  const user = useMemo(() => {
-    if (session?.mode !== "user" || !session.userId) return null;
-    return users.find((u) => u.id === session.userId) ?? null;
-  }, [session, users]);
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) console.error("Unable to restore Supabase session", error);
+      const nextUser = data.session?.user ?? null;
+      setAuthUser(nextUser);
+      if (nextUser) {
+        setGuest(false);
+        saveGuestSession(false);
+        setAccountStates((states) => ({
+          ...states,
+          [nextUser.id]: states[nextUser.id] ?? readAccountState(nextUser.id),
+        }));
+      } else {
+        setGuest(loadGuestSession());
+      }
+      setReady(true);
+    });
 
-  const status: AuthStatus =
-    session?.mode === "user" && user
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const localState = authUser
+    ? accountStates[authUser.id] ?? readAccountState(authUser.id)
+    : { plan: "free" as const, subscription: null };
+  const user = useMemo(
+    () => authUser ? accountFromAuthUser(authUser, localState) : null,
+    [authUser, localState],
+  );
+  const status: AuthStatus = !ready
+    ? "loading"
+    : authUser
       ? "authed"
-      : session?.mode === "guest"
+      : guest
         ? "guest"
         : "anon";
-
   const isPremium = user?.plan === "premium";
 
-  const patchUser = useCallback(
-    (id: string, patch: Partial<UserAccount>) => {
-      setUsers((prev) => {
-        const next = prev.map((u) => (u.id === id ? { ...u, ...patch } : u));
-        try {
-          localStorage.setItem(USERS_KEY, JSON.stringify(next));
-        } catch {
-          /* ignore */
-        }
-        return next;
-      });
-    },
-    [],
-  );
+  const signUp = useCallback(async (name: string, email: string, password: string): Promise<AuthResult> => {
+    const cleanName = name.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanName) return { error: "Please enter your name." };
+    if (!/^\S+@\S+\.\S+$/.test(cleanEmail)) return { error: "Enter a valid email address." };
+    if (password.length < 6) return { error: "Password must be at least 6 characters." };
 
-  /* ------------------------------ auth actions ------------------------------ */
-  const signUp = useCallback(
-    (name: string, email: string, password: string): string | null => {
-      const cleanEmail = email.trim().toLowerCase();
-      if (!name.trim()) return "Please enter your name.";
-      if (!/^\S+@\S+\.\S+$/.test(cleanEmail)) return "Enter a valid email address.";
-      if (password.length < 6) return "Password must be at least 6 characters.";
-      if (users.some((u) => u.email === cleanEmail))
-        return "An account with this email already exists.";
-      const account: UserAccount = {
-        id: uid(),
-        name: name.trim(),
-        email: cleanEmail,
-        passwordHash: hashPw(password),
-        createdAt: todayISO(),
-        plan: "free",
-        subscription: null,
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: {
+        data: { full_name: cleanName },
+        emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
+      },
+    });
+    if (error) return { error: friendlyAuthError(error.message) };
+    if (!data.session) {
+      return {
+        error: null,
+        message: "Your account was created. Check your email to confirm it, then sign in.",
       };
-      persistUsers([...users, account]);
-      persistSession({ mode: "user", userId: account.id });
-      return null;
-    },
-    [users],
-  );
-
-  const signIn = useCallback(
-    (email: string, password: string): string | null => {
-      const cleanEmail = email.trim().toLowerCase();
-      const found = users.find((u) => u.email === cleanEmail);
-      if (!found || found.passwordHash !== hashPw(password))
-        return "Incorrect email or password.";
-      persistSession({ mode: "user", userId: found.id });
-      return null;
-    },
-    [users],
-  );
-
-  const signOut = useCallback(() => persistSession(null), []);
-  const continueAsGuest = useCallback(
-    () => persistSession({ mode: "guest" }),
-    [],
-  );
-  const exitToAuth = useCallback(() => persistSession(null), []);
-
-  /* ---------------------------- account actions ---------------------------- */
-  const updateProfile = useCallback(
-    (name: string) => {
-      if (user && name.trim()) patchUser(user.id, { name: name.trim() });
-    },
-    [user, patchUser],
-  );
-
-  const changePassword = useCallback(
-    (current: string, next: string): string | null => {
-      if (!user) return "Not signed in.";
-      if (user.passwordHash !== hashPw(current))
-        return "Current password is incorrect.";
-      if (next.length < 6) return "New password must be at least 6 characters.";
-      patchUser(user.id, { passwordHash: hashPw(next) });
-      return null;
-    },
-    [user, patchUser],
-  );
-
-  const deleteAccount = useCallback(() => {
-    if (!user) return;
-    persistUsers(users.filter((u) => u.id !== user.id));
-    try {
-      localStorage.removeItem(`autolog-db-v2:${user.id}`);
-    } catch {
-      /* ignore */
     }
-    persistSession(null);
-  }, [user, users]);
+    return { error: null };
+  }, []);
 
-  /* -------------------------- subscription actions -------------------------- */
-  const subscribe = useCallback(
-    (cycle: PlanCycle) => {
-      if (!user) return;
-      const today = todayISO();
-      patchUser(user.id, {
-        plan: "premium",
-        subscription: {
-          cycle,
-          autoRenew: true,
-          startedAt: user.subscription?.startedAt ?? today,
-          currentPeriodEnd: addMonthsISO(today, cycle === "monthly" ? 1 : 12),
-        },
-      });
-    },
-    [user, patchUser],
-  );
+  const signIn = useCallback(async (email: string, password: string): Promise<AuthResult> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(cleanEmail)) return { error: "Enter a valid email address." };
+    if (!password) return { error: "Enter your password." };
+    const { error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+    return { error: error ? friendlyAuthError(error.message) : null };
+  }, []);
 
-  const setAutoRenew = useCallback(
-    (on: boolean) => {
-      if (!user?.subscription) return;
-      patchUser(user.id, {
-        subscription: { ...user.subscription, autoRenew: on },
-      });
-    },
-    [user, patchUser],
-  );
+  const signOut = useCallback(async () => {
+    saveGuestSession(false);
+    setGuest(false);
+    const { error } = await supabase.auth.signOut();
+    if (error) console.error("Unable to sign out", error);
+  }, []);
+
+  const continueAsGuest = useCallback(() => {
+    saveGuestSession(true);
+    setGuest(true);
+  }, []);
+
+  const exitToAuth = useCallback(() => {
+    saveGuestSession(false);
+    setGuest(false);
+  }, []);
+
+  const updateProfile = useCallback(async (name: string): Promise<string | null> => {
+    const cleanName = name.trim();
+    if (!authUser) return "Not signed in.";
+    if (!cleanName) return "Please enter your name.";
+    const { data, error } = await supabase.auth.updateUser({ data: { full_name: cleanName } });
+    if (error) return friendlyAuthError(error.message);
+    if (data.user) setAuthUser(data.user);
+    return null;
+  }, [authUser]);
+
+  const changePassword = useCallback(async (current: string, next: string): Promise<string | null> => {
+    if (!authUser?.email) return "Not signed in.";
+    if (next.length < 6) return "New password must be at least 6 characters.";
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
+      email: authUser.email,
+      password: current,
+    });
+    if (verifyError) return "Current password is incorrect.";
+    const { error } = await supabase.auth.updateUser({ password: next });
+    return error ? friendlyAuthError(error.message) : null;
+  }, [authUser]);
+
+  const updateLocalAccount = useCallback((userId: string, next: LocalAccountState) => {
+    persistAccountState(userId, next);
+    setAccountStates((states) => ({ ...states, [userId]: next }));
+  }, []);
+
+  const subscribe = useCallback((cycle: PlanCycle) => {
+    if (!authUser) return;
+    const existing = accountStates[authUser.id] ?? readAccountState(authUser.id);
+    const today = todayISO();
+    updateLocalAccount(authUser.id, {
+      plan: "premium",
+      subscription: {
+        cycle,
+        autoRenew: true,
+        startedAt: existing.subscription?.startedAt ?? today,
+        currentPeriodEnd: addMonthsISO(today, cycle === "monthly" ? 1 : 12),
+      },
+    });
+  }, [accountStates, authUser, updateLocalAccount]);
+
+  const setAutoRenew = useCallback((on: boolean) => {
+    if (!authUser) return;
+    const existing = accountStates[authUser.id] ?? readAccountState(authUser.id);
+    if (!existing.subscription) return;
+    const subscription = { ...existing.subscription, autoRenew: on };
+    if (!on && subscription.currentPeriodEnd < todayISO()) {
+      updateLocalAccount(authUser.id, { plan: "free", subscription: null });
+      return;
+    }
+    updateLocalAccount(authUser.id, { ...existing, subscription });
+  }, [accountStates, authUser, updateLocalAccount]);
+
+  const deleteAccount = useCallback(async (): Promise<string | null> => {
+    if (!authUser) return "Not signed in.";
+    const { error } = await supabase.functions.invoke("delete-account");
+    if (error) return `Account deletion failed: ${error.message}`;
+    try {
+      localStorage.removeItem(`autolog-db-v2:${authUser.id}`);
+      localStorage.removeItem(accountStateKey(authUser.id));
+    } catch {
+      // The account is already deleted; local cleanup is best effort.
+    }
+    await supabase.auth.signOut();
+    return null;
+  }, [authUser]);
 
   const value: AuthContextValue = {
     status,
@@ -320,7 +347,6 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-/** Avatar initials + a stable gradient hue per user. */
 export function avatarGradient(seed: string): string {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
@@ -331,11 +357,10 @@ export function initialsOf(name: string): string {
   return name
     .split(/\s+/)
     .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? "")
+    .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
 }
 
-/** First expiry warning horizon copy (used by pricing screen). */
 export const PREMIUM_FEATURES = [
   "Unlimited vehicles in your garage",
   "PDF resale history reports",

@@ -34,6 +34,10 @@ export default function AccountModal() {
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   /* ------------------------------ guest view ------------------------------ */
@@ -48,8 +52,8 @@ export default function AccountModal() {
             You're browsing as a guest
           </h3>
           <p className="mx-auto mt-1 max-w-xs text-[13.5px] leading-relaxed text-neutral-500">
-            Your vehicles and logs are saved in this browser's guest garage.
-            Create a free account to unlock Premium and keep your own profile.
+            Guest mode is temporary and doesn't save vehicle data. Sign in or
+            create an account to start a garage that syncs to the cloud.
           </p>
           <button
             onClick={() => {
@@ -153,16 +157,26 @@ export default function AccountModal() {
                 placeholder="Your name"
               />
               <button
-                disabled={name.trim() === user.name || !name.trim()}
-                onClick={() => {
-                  updateProfile(name);
-                  notify("Profile updated");
+                disabled={savingProfile || name.trim() === user.name || !name.trim()}
+                onClick={async () => {
+                  setSavingProfile(true);
+                  setProfileError(null);
+                  try {
+                    const error = await updateProfile(name);
+                    if (error) setProfileError(error);
+                    else notify("Profile updated");
+                  } catch {
+                    setProfileError("Couldn't save your profile. Check your connection and try again.");
+                  } finally {
+                    setSavingProfile(false);
+                  }
                 }}
                 className="shrink-0 rounded-xl bg-neutral-900 px-4 text-[13.5px] font-semibold text-white transition disabled:opacity-30"
               >
                 Save
               </button>
             </div>
+            {profileError && <p role="alert" className="mt-2 text-[12.5px] text-red-500">{profileError}</p>}
           </Field>
 
           <Field label="Change password">
@@ -185,20 +199,27 @@ export default function AccountModal() {
                   autoComplete="new-password"
                 />
                 <button
-                  disabled={!currentPw || !newPw}
-                  onClick={() => {
-                    const err = changePassword(currentPw, newPw);
-                    if (err) {
-                      setPwMsg({ ok: false, text: err });
-                    } else {
-                      setPwMsg({ ok: true, text: "Password changed." });
-                      setCurrentPw("");
-                      setNewPw("");
+                  disabled={savingPassword || !currentPw || !newPw}
+                  onClick={async () => {
+                    setSavingPassword(true);
+                    try {
+                      const error = await changePassword(currentPw, newPw);
+                      if (error) {
+                        setPwMsg({ ok: false, text: error });
+                      } else {
+                        setPwMsg({ ok: true, text: "Password changed." });
+                        setCurrentPw("");
+                        setNewPw("");
+                      }
+                    } catch {
+                      setPwMsg({ ok: false, text: "Couldn't update your password. Check your connection and try again." });
+                    } finally {
+                      setSavingPassword(false);
                     }
                   }}
                   className="shrink-0 rounded-xl bg-neutral-900 px-4 text-[13.5px] font-semibold text-white transition disabled:opacity-30"
                 >
-                  Update
+                  {savingPassword ? "Updating…" : "Update"}
                 </button>
               </div>
               {pwMsg && (
@@ -232,8 +253,9 @@ export default function AccountModal() {
           >
             <Trash2 size={16} /> Delete account
           </button>
+          {deleteError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-[12.5px] text-red-600">{deleteError}</p>}
           <p className="pt-1 text-center text-[11.5px] leading-relaxed text-neutral-400">
-            Deleting removes your account and this device's copy of your
+            Deleting permanently removes your AutoLog account and its cloud
             garage. Cars, logs and documents cannot be recovered.
           </p>
         </div>
@@ -242,13 +264,18 @@ export default function AccountModal() {
       <ConfirmDialog
         open={confirmDelete}
         title="Delete your account?"
-        message="Your profile, subscription and all vehicle data stored on this device will be permanently erased."
+        message="Your Supabase login and its cloud vehicle data will be permanently erased. This cannot be undone."
         confirmLabel="Delete account"
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => {
           setConfirmDelete(false);
-          closeModal();
-          deleteAccount();
+          setDeleteError(null);
+          void deleteAccount()
+            .then((error) => {
+              if (error) setDeleteError(error);
+              else closeModal();
+            })
+            .catch(() => setDeleteError("Couldn't delete your account. Check your connection and try again."));
         }}
       />
     </>

@@ -26,6 +26,21 @@ The Fuel tab includes an interactive map, location search, station list, fuel-gr
 - Quotes use the source's currency and price per litre. Individual quote or feed timestamps are shown when available; old reports are marked. Prices can be delayed or change without notice, so confirm them at the pump. Refresh requests new data, subject to the provider's cache and availability.
 - Mapping and live search require an internet connection. Geolocation requires a secure context such as HTTPS or localhost.
 
+## Accounts and Supabase
+
+Email/password sign-up and sign-in use the AutoLog Supabase project. Visitors use the normal account form; they do **not** need their own Supabase key. The app includes only the project's browser-safe publishable key, which is designed to be public. Never put a `service_role` or `sb_secret` key in browser code or any `VITE_*` variable.
+
+Supabase Auth handles password storage, sessions, profile-name updates, and password changes. The project currently permits email sign-ups and auto-confirms new accounts. Account deletion is handled by the `delete-account` Edge Function, which verifies the signed-in user and uses the server-side Supabase service-role environment variable; that secret is never shipped to the browser.
+
+To run locally:
+
+```sh
+npm install
+npm run dev
+```
+
+The Supabase project URL and publishable key are set as safe defaults in `src/lib/supabase.ts`, so there is no per-user setup. To point a deployment at another project, copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. The Supabase redirect allow-list includes the repository's GitHub Pages URL (`https://cherejdibaciujavier-pixel.github.io/Auto-Log/`), localhost development, and the existing Vercel domains. If you deploy under a custom domain or a different path, add that URL to Supabase Auth's **URL Configuration → Redirect URLs** and set the production **Site URL**.
+
 ## Data and deployment
 
-Vehicle records and demo accounts are stored in the current browser, not synced to a server. The existing account and subscription flows are local demonstrations, not production authentication or payment processing. The Vite build produces static files in `dist/` for deployment to a static host.
+Signed-in users' vehicle records, fuel/service logs, documents, and settings are stored in the Supabase `user_app_data` table and sync when changes are saved. Row-level security restricts every record to its owner. Guest mode is a temporary in-memory demo and is not persisted. If an account has no cloud row yet, matching legacy demo data is copied to Supabase and removed from that browser after the cloud save succeeds. Premium checkout and subscriptions are still a local demo, not real payment processing. The Vite build produces static files in `dist/` for deployment to a static host.
