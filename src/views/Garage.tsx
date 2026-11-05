@@ -22,6 +22,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { useData } from "../store/DataContext";
+import { VehiclePhoto } from "../components/VehiclePhoto";
 import { FREE_VEHICLE_LIMIT, useAuth } from "../store/AuthContext";
 import {
   computeAlerts,
@@ -116,17 +117,17 @@ export default function GarageView() {
     <div className="animate-fade-up">
       {/* --------------------------- vehicle hero --------------------------- */}
       <div className="relative overflow-hidden rounded-[28px] bg-neutral-900 text-white shadow-[0_12px_32px_rgba(0,0,0,0.14)]">
-        {vehicle.image ? (
-          <img
-            src={vehicle.image}
-            alt={vehicleName(vehicle)}
-            className="h-60 w-full object-cover sm:h-72"
-          />
-        ) : (
-          <div className="flex h-60 w-full items-center justify-center bg-gradient-to-br from-neutral-700 to-neutral-900 sm:h-72">
-            <Car size={72} className="text-white/25" strokeWidth={1.2} />
-          </div>
-        )}
+        <VehiclePhoto
+          path={vehicle.imagePath}
+          src={vehicle.image}
+          alt={vehicleName(vehicle)}
+          className="h-60 w-full object-cover sm:h-72"
+          fallback={(
+            <div className="flex h-60 w-full items-center justify-center bg-gradient-to-br from-neutral-700 to-neutral-900 sm:h-72">
+              <Car size={72} className="text-white/25" strokeWidth={1.2} />
+            </div>
+          )}
+        />
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-black/10" />
         <button
           onClick={() => openModal("vehicle", vehicle.id)}
@@ -342,17 +343,17 @@ export default function GarageView() {
                   : "ring-black/[0.04] hover:ring-black/10",
               )}
             >
-              {v.image ? (
-                <img
-                  src={v.image}
-                  alt={vehicleName(v)}
-                  className="h-14 w-[76px] shrink-0 rounded-2xl object-cover"
-                />
-              ) : (
-                <span className="flex h-14 w-[76px] shrink-0 items-center justify-center rounded-2xl bg-[#f5f5f7] text-neutral-400">
-                  <Car size={22} />
-                </span>
-              )}
+              <VehiclePhoto
+                path={v.imagePath}
+                src={v.image}
+                alt={vehicleName(v)}
+                className="h-14 w-[76px] shrink-0 rounded-2xl object-cover"
+                fallback={(
+                  <span className="flex h-14 w-[76px] shrink-0 items-center justify-center rounded-2xl bg-[#f5f5f7] text-neutral-400">
+                    <Car size={22} />
+                  </span>
+                )}
+              />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[15px] font-semibold text-neutral-900">
                   {vehicleName(v)}
