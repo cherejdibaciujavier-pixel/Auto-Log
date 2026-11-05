@@ -239,10 +239,19 @@ function Header() {
           <VehicleSwitcher />
         </div>
 
-        {isPremium && (
+        {isPremium ? (
           <span className="hidden items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-wide text-amber-600 ring-1 ring-amber-200/60 sm:inline-flex">
             <Crown size={12} /> Premium
           </span>
+        ) : (
+          <button
+            onClick={() => openModal("pricing")}
+            title="Upgrade to AutoLog Premium"
+            aria-label="Upgrade to AutoLog Premium"
+            className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-amber-400 px-2.5 text-[12px] font-bold text-neutral-900 shadow-sm transition hover:bg-amber-300 sm:px-3"
+          >
+            <Crown size={14} /> Upgrade
+          </button>
         )}
         <button
           onClick={() => setTab("garage")}
