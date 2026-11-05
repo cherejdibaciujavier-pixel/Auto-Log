@@ -3,3 +3,13 @@ verify_jwt = true
 
 [functions.redeem-lifetime-premium]
 verify_jwt = true
+
+[functions.create-checkout-session]
+verify_jwt = true
+
+[functions.create-billing-portal-session]
+verify_jwt = true
+
+# Stripe authenticates webhook calls with Stripe-Signature, not a Supabase JWT.
+[functions.stripe-webhook]
+verify_jwt = false
