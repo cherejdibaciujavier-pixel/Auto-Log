@@ -285,7 +285,7 @@ export function VehicleFormModal() {
               <input className={inputCls} value={vin} onChange={(e) => setVin(e.target.value)} placeholder="SHHFK8G40NU…" maxLength={17} />
             </Field>
           </div>
-          <Field label="Car photo" hint={user ? "Choose from your gallery · JPEG, PNG, WebP or AVIF · up to 10 MB" : "Sign in to upload a photo to your cloud garage"}>
+          <Field label="Photo (optional)" hint={user ? "Paste a photo URL or choose an image from your gallery · up to 10 MB" : "Paste a photo URL, or sign in to upload from your gallery"}>
             <input
               ref={photoInputRef}
               className="hidden"
@@ -298,25 +298,34 @@ export function VehicleFormModal() {
                 event.currentTarget.value = "";
               }}
             />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={!user}
-                onClick={() => photoInputRef.current?.click()}
-                className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#f5f5f7] px-4 py-2.5 text-[13.5px] font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <ImagePlus size={17} />
-                {photoFile ? "Choose another photo" : "Choose from gallery"}
-              </button>
-              {photoFile && (
+            <div className="space-y-2.5">
+              <input
+                className={inputCls}
+                value={image}
+                onChange={(e) => setImage(e.target.value)}
+                placeholder="https://…"
+                aria-label="Photo URL"
+              />
+              <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setPhotoFile(null)}
-                  className="rounded-xl px-3 text-[13px] font-medium text-red-600 hover:bg-red-50"
+                  disabled={!user}
+                  onClick={() => photoInputRef.current?.click()}
+                  className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#f5f5f7] px-4 py-2.5 text-[13.5px] font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Remove
+                  <ImagePlus size={17} />
+                  {photoFile ? "Choose another photo" : "Choose from gallery"}
                 </button>
-              )}
+                {photoFile && (
+                  <button
+                    type="button"
+                    onClick={() => setPhotoFile(null)}
+                    className="rounded-xl px-3 text-[13px] font-medium text-red-600 hover:bg-red-50"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
             </div>
             {(photoPreview || existingPhotoUrl) && (
               <img
@@ -325,9 +334,6 @@ export function VehicleFormModal() {
                 className="mt-3 h-36 w-full rounded-2xl object-cover"
               />
             )}
-          </Field>
-          <Field label="Or use a photo URL (optional)">
-            <input className={inputCls} value={image} onChange={(e) => setImage(e.target.value)} placeholder="https://…" />
           </Field>
           {photoError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2.5 text-[13px] font-medium text-red-600">{photoError}</p>}
           <PrimaryButton type="submit" disabled={!valid || savingVehicle}>
