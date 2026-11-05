@@ -132,6 +132,8 @@ export interface Settings {
   serviceIntervalKm: number;
   /** Next-service interval in days (default 365). */
   serviceIntervalDays: number;
+  /** Opt-in, foreground geofence reminder; location is not persisted. */
+  fuelStationPromptEnabled: boolean;
 }
 
 export interface AppData {

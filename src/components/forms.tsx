@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
+  BellRing,
   CalendarDays,
   ClipboardCheck,
   Crown,
@@ -1054,6 +1055,9 @@ export function SettingsModal() {
   const [backupFileName, setBackupFileName] = useState("");
   const [backupError, setBackupError] = useState<string | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(
+    () => typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+  );
   const backupInputRef = useRef<HTMLInputElement>(null);
 
   /** Premium feature: full JSON backup of the active garage. */
@@ -1112,6 +1116,39 @@ export function SettingsModal() {
       setBackupFileName(file.name);
     } catch (error) {
       setBackupError(error instanceof Error ? error.message : "Couldn't read this backup file.");
+    }
+  };
+
+  const enableFuelStationPrompts = async () => {
+    if (typeof Notification === "undefined") {
+      setNotificationPermission("unsupported");
+      notify("This browser does not support system notifications.");
+      return;
+    }
+    if (!navigator.geolocation || !window.isSecureContext) {
+      notify("Fuel-stop reminders need location access on a secure HTTPS page.");
+      return;
+    }
+    try {
+      const permission = Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission !== "granted") {
+        notify("Allow notifications in your browser to enable fuel-stop reminders.");
+        return;
+      }
+      await new Promise<void>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          () => resolve(),
+          (error) => reject(error),
+          { enableHighAccuracy: false, timeout: 12000, maximumAge: 30000 },
+        );
+      });
+      updateSettings({ fuelStationPromptEnabled: true });
+      notify("Fuel-stop reminders enabled while AutoLog is open.");
+    } catch {
+      notify("Allow location access in your browser to enable fuel-stop reminders.");
     }
   };
 
@@ -1189,6 +1226,42 @@ export function SettingsModal() {
               Save interval
             </PrimaryButton>
           )}
+
+          <div className="rounded-2xl bg-[#f5f5f7] p-4">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#0071e3]">
+                <BellRing size={17} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13.5px] font-semibold text-neutral-800">Fuel-stop reminder</span>
+                <span className="block text-[11.5px] text-neutral-500">Notify me when I’m near a fuel station</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.fuelStationPromptEnabled}
+                onChange={(event) => {
+                  if (event.target.checked) void enableFuelStationPrompts();
+                  else {
+                    updateSettings({ fuelStationPromptEnabled: false });
+                    notify("Fuel-stop reminders turned off.");
+                  }
+                }}
+                aria-label="Enable fuel-station notifications"
+                className="h-5 w-5 accent-[#0071e3]"
+              />
+            </div>
+            <p className="mt-2 text-[11.5px] leading-relaxed text-neutral-500">
+              While AutoLog is open, approximate location is checked with OpenStreetMap-powered station providers. Within about 120 m, a notification offers to open the fuel log. AutoLog doesn’t store location; browser background detection isn’t available.
+            </p>
+            {settings.fuelStationPromptEnabled && notificationPermission !== "granted" && (
+              <button
+                onClick={() => void enableFuelStationPrompts()}
+                className="mt-2 rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-[#0071e3] ring-1 ring-black/5"
+              >
+                {notificationPermission === "denied" ? "Review browser permissions" : "Enable on this device"}
+              </button>
+            )}
+          </div>
 
           <div className="rounded-2xl bg-[#f5f5f7] p-4">
             <p className="text-[13.5px] font-semibold text-neutral-800">Your data</p>

@@ -159,6 +159,7 @@ export function parseBackupJson(source: string): AppData {
     unit: "km",
     serviceIntervalKm: 15000,
     serviceIntervalDays: 365,
+    fuelStationPromptEnabled: false,
   };
   const vehicles = (sourceData.vehicles as unknown[]).map(parseVehicle);
   const services = (sourceData.services as unknown[]).map(parseService);
@@ -188,11 +189,16 @@ export function parseBackupJson(source: string): AppData {
   const unit = rawSettings.unit ?? defaults.unit;
   if (!["EUR", "USD", "GBP"].includes(String(currency))) throw new Error("Backup currency is not supported.");
   if (!["km", "mi"].includes(String(unit))) throw new Error("Backup distance unit is not supported.");
+  const fuelStationPromptEnabled = rawSettings.fuelStationPromptEnabled ?? defaults.fuelStationPromptEnabled;
+  if (typeof fuelStationPromptEnabled !== "boolean") {
+    throw new Error("Fuel-station notification setting must be a boolean.");
+  }
   const settings = {
     currency: currency as AppData["settings"]["currency"],
     unit: unit as AppData["settings"]["unit"],
     serviceIntervalKm: finite(rawSettings.serviceIntervalKm ?? defaults.serviceIntervalKm, "Service interval"),
     serviceIntervalDays: finite(rawSettings.serviceIntervalDays ?? defaults.serviceIntervalDays, "Service interval days"),
+    fuelStationPromptEnabled,
   };
   if (settings.serviceIntervalKm <= 0 || settings.serviceIntervalDays <= 0) {
     throw new Error("Service intervals in the backup must be greater than zero.");

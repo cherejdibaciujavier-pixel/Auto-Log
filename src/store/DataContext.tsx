@@ -101,6 +101,7 @@ export function emptyAppData(): AppData {
       unit: "km",
       serviceIntervalKm: 15000,
       serviceIntervalDays: 365,
+      fuelStationPromptEnabled: false,
     },
     activeVehicleId: null,
   };
