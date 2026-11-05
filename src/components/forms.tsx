@@ -4,8 +4,9 @@
 /*  canonical storage units (km / litres) on save.                     */
 /* ------------------------------------------------------------------ */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
+  CalendarDays,
   ClipboardCheck,
   Crown,
   Download,
@@ -13,8 +14,10 @@ import {
   Receipt,
   ShieldCheck,
   Trash2,
+  Upload,
 } from "lucide-react";
 import type {
+  AppData,
   CurrencyCode,
   DocumentType,
   FuelType,
@@ -22,6 +25,8 @@ import type {
 } from "../types";
 import { DOCUMENT_META, SERVICE_CATEGORIES } from "../types";
 import { useData } from "../store/DataContext";
+import { BACKUP_FORMAT, BACKUP_VERSION, parseBackupJson } from "../lib/backup";
+import { createMaintenanceCalendar } from "../lib/calendar";
 import { FREE_VEHICLE_LIMIT, useAuth } from "../store/AuthContext";
 import { getMakes, getModels, getMotorisations } from "../lib/vehicleCatalog";
 import { uploadVehiclePhoto } from "../lib/vehiclePhotos";
@@ -1035,7 +1040,7 @@ export function DocumentFormModal() {
 
 /* ------------------------------ Settings ------------------------------ */
 export function SettingsModal() {
-  const { data, closeModal, openModal, settings, updateSettings, clearAll, notify } =
+  const { data, closeModal, openModal, settings, updateSettings, clearAll, restoreBackup, notify } =
     useData();
   const { isPremium, user } = useAuth();
   const [intervalKm, setIntervalKm] = useState(
@@ -1045,6 +1050,11 @@ export function SettingsModal() {
     String(settings.serviceIntervalDays),
   );
   const [confirmClear, setConfirmClear] = useState(false);
+  const [backupToRestore, setBackupToRestore] = useState<AppData | null>(null);
+  const [backupFileName, setBackupFileName] = useState("");
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const backupInputRef = useRef<HTMLInputElement>(null);
 
   /** Premium feature: full JSON backup of the active garage. */
   const exportBackup = () => {
@@ -1052,21 +1062,84 @@ export function SettingsModal() {
       openModal("pricing");
       return;
     }
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
+    const backup = {
+      format: BACKUP_FORMAT,
+      version: BACKUP_VERSION,
+      exportedAt: new Date().toISOString(),
+      data,
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "autolog-backup.json";
+    a.download = `autolog-backup-${todayISO()}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify("Backup downloaded");
+  };
+
+  const exportCalendar = () => {
+    const calendar = createMaintenanceCalendar(data);
+    const blob = new Blob([calendar], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "autolog-maintenance.ics";
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const mileageOnlyPlans = data.maintenancePlans.filter((plan) => plan.intervalDays === null).length;
+    notify(mileageOnlyPlans > 0
+      ? `Calendar exported; ${mileageOnlyPlans} mileage-only task${mileageOnlyPlans === 1 ? "" : "s"} stay in AutoLog.`
+      : "Calendar reminders exported");
+  };
+
+  const readBackupFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    setBackupError(null);
+    setBackupToRestore(null);
+    if (file.size > 25 * 1024 * 1024) {
+      setBackupError("Backup files must be 25 MB or smaller.");
+      return;
+    }
+    try {
+      const imported = parseBackupJson(await file.text());
+      setBackupToRestore(imported);
+      setBackupFileName(file.name);
+    } catch (error) {
+      setBackupError(error instanceof Error ? error.message : "Couldn't read this backup file.");
+    }
   };
 
   const dirty =
     num(intervalKm) !== Math.round(kmToUnit(settings.serviceIntervalKm, settings)) ||
     num(intervalDays) !== settings.serviceIntervalDays;
+  const mergeVehicleCount = (() => {
+    if (!backupToRestore) return 0;
+    const known = new Set(data.vehicles.map((vehicle) =>
+      vehicle.vin.trim() ? `vin:${vehicle.vin.trim().toUpperCase()}`
+        : vehicle.plate.trim() ? `plate:${vehicle.plate.trim().toUpperCase()}`
+          : `id:${vehicle.id}:${vehicle.make.toLowerCase()}:${vehicle.model.toLowerCase()}:${vehicle.year}`));
+    let added = 0;
+    for (const vehicle of backupToRestore.vehicles) {
+      const identity = vehicle.vin.trim() ? `vin:${vehicle.vin.trim().toUpperCase()}`
+        : vehicle.plate.trim() ? `plate:${vehicle.plate.trim().toUpperCase()}`
+          : `id:${vehicle.id}:${vehicle.make.toLowerCase()}:${vehicle.model.toLowerCase()}:${vehicle.year}`;
+      if (!known.has(identity)) {
+        known.add(identity);
+        added++;
+      }
+    }
+    return added;
+  })();
+  const mergeNeedsPremium = Boolean(backupToRestore && !isPremium
+    && data.vehicles.length + mergeVehicleCount > FREE_VEHICLE_LIMIT);
+  const replaceNeedsPremium = Boolean(backupToRestore && !isPremium
+    && backupToRestore.vehicles.length > FREE_VEHICLE_LIMIT);
 
   return (
     <>
@@ -1124,28 +1197,104 @@ export function SettingsModal() {
                 ? "Your garage is securely stored in Supabase and syncs with your account."
                 : "Guest data is held only for this session and is not saved or uploaded."}
             </p>
-            <div className="mt-3 flex gap-2">
+            <p className="mt-1 text-[11.5px] leading-relaxed text-neutral-400">
+              JSON backups include vehicle-photo references; uploaded photo files remain in the original private cloud account.
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
               <button
                 onClick={exportBackup}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-white py-2.5 text-[13.5px] font-medium text-neutral-700 ring-1 ring-black/5 transition hover:bg-neutral-50"
+                className="flex items-center justify-center gap-1.5 rounded-full bg-white py-2.5 text-[13px] font-medium text-neutral-700 ring-1 ring-black/5 transition hover:bg-neutral-50"
               >
-                <Download size={14} />
-                Backup (JSON)
+                <Download size={14} /> Backup JSON
                 {!isPremium && <Crown size={13} className="text-amber-500" />}
               </button>
               <button
+                onClick={() => backupInputRef.current?.click()}
+                className="flex items-center justify-center gap-1.5 rounded-full bg-white py-2.5 text-[13px] font-medium text-neutral-700 ring-1 ring-black/5 transition hover:bg-neutral-50"
+              >
+                <Upload size={14} /> Restore backup
+              </button>
+              <button
+                onClick={exportCalendar}
+                className="col-span-2 flex items-center justify-center gap-1.5 rounded-full bg-white py-2.5 text-[13px] font-medium text-neutral-700 ring-1 ring-black/5 transition hover:bg-neutral-50"
+              >
+                <CalendarDays size={14} /> Export service & expiry reminders (.ics)
+              </button>
+              <button
                 onClick={() => setConfirmClear(true)}
-                className="flex-1 rounded-full bg-white py-2.5 text-[13.5px] font-medium text-red-600 ring-1 ring-red-100 transition hover:bg-red-50"
+                className="col-span-2 rounded-full bg-white py-2.5 text-[13px] font-medium text-red-600 ring-1 ring-red-100 transition hover:bg-red-50"
               >
                 Erase everything
               </button>
             </div>
+            <input
+              ref={backupInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={readBackupFile}
+              aria-label="Choose an AutoLog JSON backup"
+            />
+            {backupError && <p role="alert" className="mt-2 text-[12.5px] text-red-600">{backupError}</p>}
           </div>
+
+          {backupToRestore && (
+            <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
+              <p className="text-[13.5px] font-semibold text-neutral-800">Backup ready: {backupFileName}</p>
+              <p className="mt-1 text-[12px] leading-relaxed text-neutral-500">
+                {backupToRestore.vehicles.length} vehicles · {backupToRestore.services.length} service logs · {backupToRestore.fuel.length} fuel logs · {backupToRestore.documents.length} documents · {backupToRestore.maintenancePlans.length} planned tasks
+              </p>
+              <p className="mt-2 text-[11.5px] text-neutral-500">
+                Merge keeps your current garage and adds non-duplicate records. Replace overwrites it with this backup.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => {
+                    if (mergeNeedsPremium) {
+                      openModal("pricing");
+                      return;
+                    }
+                    restoreBackup(backupToRestore, "merge");
+                    setBackupToRestore(null);
+                    setBackupError(null);
+                  }}
+                  className="flex-1 rounded-full bg-white py-2.5 text-[12.5px] font-semibold text-[#0071e3] ring-1 ring-blue-100"
+                >
+                  {mergeNeedsPremium ? "Upgrade to merge" : "Merge backup"}
+                </button>
+                <button
+                  onClick={() => {
+                    if (replaceNeedsPremium) {
+                      openModal("pricing");
+                      return;
+                    }
+                    setConfirmReplace(true);
+                  }}
+                  className="flex-1 rounded-full bg-red-600 py-2.5 text-[12.5px] font-semibold text-white"
+                >
+                  {replaceNeedsPremium ? "Upgrade to restore fleet" : "Replace garage"}
+                </button>
+              </div>
+            </div>
+          )}
           <p className="text-center text-[11.5px] text-neutral-400">
             AutoLog v1.1 · Add to Home Screen for the full PWA experience
           </p>
         </div>
       </Modal>
+      <ConfirmDialog
+        open={confirmReplace && !!backupToRestore}
+        title="Replace current garage?"
+        message="This will overwrite the current garage with the selected backup, including all vehicles, logs, documents, plans, and settings. This cannot be undone."
+        confirmLabel="Replace garage"
+        onCancel={() => setConfirmReplace(false)}
+        onConfirm={() => {
+          if (backupToRestore) restoreBackup(backupToRestore, "replace");
+          setConfirmReplace(false);
+          setBackupToRestore(null);
+          closeModal();
+        }}
+      />
       <ConfirmDialog
         open={confirmClear}
         title="Erase all data?"

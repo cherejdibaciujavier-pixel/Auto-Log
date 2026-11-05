@@ -91,6 +91,19 @@ export interface VehicleDocument {
   notes: string;
 }
 
+export interface MaintenancePlan {
+  id: string;
+  vehicleId: string;
+  title: string;
+  /** Recurrence interval in canonical kilometres; null disables distance tracking. */
+  intervalKm: number | null;
+  /** Recurrence interval in days; null disables date tracking. */
+  intervalDays: number | null;
+  lastCompletedDate: string;
+  /** Odometer in canonical kilometres at last completion. */
+  lastCompletedMileage: number;
+}
+
 export const DOCUMENT_META: Record<
   DocumentType,
   { label: string; short: string; hint: string }
@@ -126,6 +139,7 @@ export interface AppData {
   services: ServiceRecord[];
   fuel: FuelRecord[];
   documents: VehicleDocument[];
+  maintenancePlans: MaintenancePlan[];
   settings: Settings;
   activeVehicleId: string | null;
 }
